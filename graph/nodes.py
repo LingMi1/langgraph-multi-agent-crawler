@@ -2754,6 +2754,63 @@ def _strip_nav_noise(html: str) -> str:
             el.decompose()
             removed += 1
 
+    # 6. 通用分隔符面包屑（无 class 的 "首页 > 栏目 > 标题" 链接组）。
+    #    老站/SPA 的面包屑常是 <div><a>首页</a> > <a>栏目</a> > <span>标题</span></div>
+    #    不带 breadcrumb class，上面的 class 匹配不到，只能靠结构特征识别：
+    #    文本短、含"首页/Home"链接、含分隔符(>/»/→)、以站内链接为主。
+    _bc_sep = re.compile(r'[>＞»→]')
+    _bc_home = re.compile(r'(首页|主页|Home|HOME|网站首页)')
+    for el in soup.find_all(["div", "ul", "ol", "p", "nav"]):
+        t = el.get_text(" ", strip=True)
+        if not t or len(t) > 100:
+            continue
+        # 正文特征保护：含标题/图片的容器不是纯面包屑
+        if el.find(["h1", "h2", "h3", "h4", "h5", "h6", "img"]):
+            continue
+        links = el.find_all("a", href=True)
+        if len(links) < 2:
+            continue
+        if not _bc_home.search(t) or not _bc_sep.search(t):
+            continue
+        internal = sum(
+            1 for a in links
+            if (a.get("href") or "").startswith("/")
+            or any(d in (a.get("href") or "") for d in ("harbin-electric", "xiapuhaitou"))
+        )
+        if internal >= 2:
+            el.decompose()
+            removed += 1
+
+    # 7. 导航链接组：站内链接 >= 5 个、文本短、无正文特征、且不是正文列表。
+    #    用于清理最终模板里残留的顶部/侧边导航（如 "首页 | 公司概况 | 新闻中心..."）。
+    #    安全阀：含标题/图片不删；文本 > 250 视为正文列表不删；
+    #    含"条/页/日期/正文句号"等正文信号不删。
+    _nav_menu = re.compile(r'首页|Home|主站|English|EN\b', re.I)
+    for el in soup.find_all(["ul", "div"]):
+        if el.find(["h1", "h2", "h3", "h4", "h5", "h6", "img"]):
+            continue
+        links = el.find_all("a", href=True)
+        if len(links) < 5:
+            continue
+        t = el.get_text(" ", strip=True)
+        if not t or len(t) > 250:
+            continue
+        internal = sum(
+            1 for a in links
+            if (a.get("href") or "").startswith("/")
+            or any(d in (a.get("href") or "") for d in ("harbin-electric", "xiapuhaitou"))
+        )
+        if internal < 5:
+            continue
+        # 正文列表信号（栏目列表页的内容区通常是长文本/日期）：出现这些则视为内容。
+        # 注意不能含孤立的"页/条"等字——"首页""头条"等导航词会被误伤
+        if re.search(r'\d{4}[-/年]\d{1,2}|共\s*\d+\s*条|第\s*\d+\s*页|下一页|\d{1,2}[-/]\d{1,2}', t):
+            continue
+        # 导航菜单特征：文本里含"首页/Home"等导航标志，或全部链接均短（<=12字）
+        if _nav_menu.search(t) or all(len(a.get_text(strip=True)) <= 12 for a in links):
+            el.decompose()
+            removed += 1
+
     if removed:
         agent_logger.info(f"[Graph::clean] 去除导航栏残留 {removed} 处")
 
