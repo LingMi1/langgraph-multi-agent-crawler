@@ -137,10 +137,16 @@ class UrlMemory:
                     old_status = existing[1]
                     # 只有当新状态是 success 且有 HTML 内容时才覆盖
                     if status == "success" and html_content:
-                        conn.execute(
-                            "UPDATE visited_urls SET status=?, title=?, html_content=?, created_at=datetime('now', 'localtime') WHERE url=?",
-                            (status, title, html_content, url)
-                        )
+                        if base_url:
+                            conn.execute(
+                                "UPDATE visited_urls SET status=?, title=?, base_url=?, html_content=?, created_at=datetime('now', 'localtime') WHERE url=?",
+                                (status, title, base_url, html_content, url)
+                            )
+                        else:
+                            conn.execute(
+                                "UPDATE visited_urls SET status=?, title=?, html_content=?, created_at=datetime('now', 'localtime') WHERE url=?",
+                                (status, title, html_content, url)
+                            )
                     elif status == "success" and old_status != "success":
                         # 升级状态但不一定有 html（比如预检通过后重新标记）
                         conn.execute(

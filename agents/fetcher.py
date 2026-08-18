@@ -14,6 +14,7 @@ import asyncio
 import re
 import random
 from typing import List, Optional, AsyncIterator, Tuple
+from urllib.parse import urlparse
 
 import httpx
 import urllib3
@@ -497,10 +498,12 @@ class HttpxPlaywrightFetcher(FetcherRouterInterface):
                         pass
 
                 # 标记已访问（缓存长内容）
+                _parsed = urlparse(url)
+                _base = f"{_parsed.scheme}://{_parsed.netloc}"
                 if len(html) >= 500:
-                    self._memory.mark_visited(url, status="success", html_content=html)
+                    self._memory.mark_visited(url, status="success", base_url=_base, html_content=html)
                 else:
-                    self._memory.mark_visited(url)
+                    self._memory.mark_visited(url, base_url=_base)
 
                 return await self._html_to_pagedata(url, html, "httpx", cookies=resp_cookies)
 
@@ -542,7 +545,9 @@ class HttpxPlaywrightFetcher(FetcherRouterInterface):
                 self._pw_executor, _fetch_with_playwright_sync, url, self.use_system_chrome
             )
             if html and len(html) >= 100:
-                self._memory.mark_visited(url, status="success", html_content=html)
+                _parsed = urlparse(url)
+                _base = f"{_parsed.scheme}://{_parsed.netloc}"
+                self._memory.mark_visited(url, status="success", base_url=_base, html_content=html)
                 return await self._html_to_pagedata(url, html, "playwright")
             else:
                 raise RuntimeError(err or "Playwright 返回空内容")
