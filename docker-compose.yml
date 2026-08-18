@@ -1,0 +1,60 @@
+version: "3.9"
+
+# ============================================================================
+# 企业级 AI Agent 爬虫 Docker Compose (Phase 3)
+# 一键启动: docker-compose up -d
+# ============================================================================
+
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: agent-crawler:latest
+    container_name: agent-crawler
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    env_file:
+      - .env
+    environment:
+      # 运行时配置（可被 .env 覆盖）
+      - PYTHONUNBUFFERED=1
+      - SAVE_MODE=local
+      - LOCAL_BACKUP_DIR=/app/output
+      - CSV_OUTPUT_DIR=/app/csv_output
+      - MAX_PAGES=500
+      - MAX_DEPTH=5
+      - MAX_NAV_DEPTH=4
+      - IMAGE_DOWNLOAD=false
+      # HITL 阈值
+      - HITL_BATCH_SAVE_THRESHOLD=1000
+      - HITL_TOKEN_COST_THRESHOLD=10.0
+    volumes:
+      # 挂载数据目录（CSV 输出 / HTML 文件 / SQLite 内存数据库）
+      - ./output:/app/output
+      - ./csv_output:/app/csv_output
+      - ./data:/app/data
+      # 挂载代码目录（开发模式热更新）
+      - .:/app
+    networks:
+      - agent-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 可选：未来可扩展的 Web UI 服务
+  # webui:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.webui
+  #   ports:
+  #     - "8080:8080"
+  #   depends_on:
+  #     - agent
+
+networks:
+  agent-network:
+    driver: bridge

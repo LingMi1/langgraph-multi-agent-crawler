@@ -1,0 +1,6 @@
+{
+  "platform": "DeepSeek（深度求索）",
+  "base_url": "https://api.deepseek.com/v1",
+  "api_key": "sk-你的API密钥",
+  "model_name": "deepseek-chat"
+}

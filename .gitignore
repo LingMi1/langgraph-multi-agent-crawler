@@ -1,0 +1,33 @@
+# ── 敏感配置（含 API key，绝不入库） ──
+config.json
+.env
+
+# ── 运行产物 ──
+output/
+_harbin_demo/
+*.log
+crawler.log
+
+# ── 打包产物 ──
+build/
+dist/
+*.exe
+*.spec.bak
+
+# ── Python 缓存 ──
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+
+# ── 数据库 ──
+*.db
+*.sqlite3
+
+# ── IDE / 系统 ──
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
