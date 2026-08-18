@@ -289,8 +289,34 @@ def _fetch_with_playwright_sync(url: str, use_system_chrome: bool = False) -> Tu
                 "Upgrade-Insecure-Requests": "1",
                 "Cache-Control": "no-cache",
             })
-            response = page.goto(url, wait_until="networkidle", timeout=30000)
+            # ★ SPA 渲染策略：domcontentloaded + 内容稳定轮询
+            #   networkidle 对 Vue/React SPA 不可靠：
+            #   - 数据 API 刚返回时 Vue 还要一个 tick 才挂 DOM → 提前触发 → 空壳
+            #   - 站内有持续后台请求（轮询/统计）→ 永不触发 → 30s 超时
+            #   改为 DOM 加载后轮询正文长度，连续 2 次不变即视为渲染完成
+            response = page.goto(url, wait_until="domcontentloaded", timeout=30000)
             http_status = response.status if response else 0
+
+            # 内容稳定等待（最长 12s）
+            try:
+                page.wait_for_function(
+                    """() => {
+                        const el = document.querySelector('#app') || document.body;
+                        const len = (el.innerText || '').length;
+                        if (!window.__pw_len) { window.__pw_len = len; window.__pw_stable = 0; return false; }
+                        if (len === window.__pw_len && len > 0) {
+                            window.__pw_stable += 1;
+                        } else {
+                            window.__pw_stable = 0;
+                        }
+                        window.__pw_len = len;
+                        return window.__pw_stable >= 2;
+                    }""",
+                    timeout=12000,
+                )
+            except Exception:
+                # 超时就用当前内容（慢页面至少拿到部分渲染结果，不再整体失败）
+                agent_logger.info(f"[FetcherRouter] 内容稳定等待超时，使用当前 DOM | {url[:60]}")
 
             # ★ 模拟人类滚动（替换原有简单 scrollTo）
             _simulate_human_scroll(page)
