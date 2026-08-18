@@ -2806,8 +2806,41 @@ def _strip_nav_noise(html: str) -> str:
         # 注意不能含孤立的"页/条"等字——"首页""头条"等导航词会被误伤
         if re.search(r'\d{4}[-/年]\d{1,2}|共\s*\d+\s*条|第\s*\d+\s*页|下一页|\d{1,2}[-/]\d{1,2}', t):
             continue
-        # 导航菜单特征：文本里含"首页/Home"等导航标志，或全部链接均短（<=12字）
-        if _nav_menu.search(t) or all(len(a.get_text(strip=True)) <= 12 for a in links):
+        # 导航菜单特征：文本里含"首页/Home"等导航标志才删。
+        # 注意不能加"全短链接"分支——"新闻一/新闻二..."式列表页正文也会被误删
+        if _nav_menu.search(t):
+            el.decompose()
+            removed += 1
+
+    # 8. 导航容器 class/id 整块删除（menu/nav/header 关键词）。
+    #    老站/SPA 的顶部主导航常是 <div class="menu"> / <td class="topnav"> /
+    #    <ul id="main-menu"> 等，不含 <nav> 标签，预清理删不掉；
+    #    _is_noise_block 黑名单也没有 menu/nav 关键词，只能在此最终兜底。
+    #    安全阀：含 h1-h6（可能是内容标题）不删；文本>200（长内容）不删；站内链接<3（非导航）不删。
+    _nav_container = re.compile(
+        r'(menu|navbar|nav-bar|nav_bar|topnav|top-nav|top_nav|mainnav|main-nav|'
+        r'headernav|header-nav|headmenu|head-menu|site-nav|site_nav|sitenav|'
+        r'globalnav|global-nav|channel-nav|channelnav)', re.I
+    )
+    for el in soup.find_all(["div", "ul", "ol", "nav", "td"]):
+        cls = " ".join(el.get("class") or [])
+        cid = el.get("id") or ""
+        if not (_nav_container.search(cls) or _nav_container.search(cid)):
+            continue
+        if el.find(["h1", "h2", "h3", "h4", "h5", "h6"]):
+            continue
+        t = el.get_text(" ", strip=True)
+        if not t or len(t) > 200:
+            continue
+        links = el.find_all("a", href=True)
+        if len(links) < 3:
+            continue
+        internal = sum(
+            1 for a in links
+            if (a.get("href") or "").startswith("/")
+            or any(d in (a.get("href") or "") for d in ("harbin-electric", "xiapuhaitou"))
+        )
+        if internal >= 3:
             el.decompose()
             removed += 1
 
