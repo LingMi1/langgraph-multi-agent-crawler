@@ -28,6 +28,5 @@ venv/
 
 # ── IDE / 系统 ──
 .idea/
-.vscode/
 .DS_Store
 Thumbs.db
