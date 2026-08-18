@@ -586,7 +586,11 @@ def _find_main_content(soup: BeautifulSoup, page_url: str = ""):
         skip_kw = ["nav", "menu", "footer", "sidebar", "widget", "header",
                    "breadcrumb", "pagination", "comment", "ad", "ads",
                    "banner", "carousel", "slider", "popup", "modal"]
-        return any(kw in el_class or kw in el_id for kw in skip_kw)
+        # 按连字符/下划线/空白切分为 token 精确匹配。
+        # 不能用子串匹配：Tailwind 类如 leading-relaxed 含子串 "ad"、
+        # grid-cols-2 含 "list" 等，会把正文区块误判为噪音/广告整块删除。
+        tokens = re.split(r"[\s\-_:./#\[\]()\"']+", el_class + " " + el_id)
+        return any(kw in tokens for kw in skip_kw)
 
     # ── 链接密度过滤 ──
     def _link_density(el) -> float:
@@ -616,6 +620,21 @@ def _find_main_content(soup: BeautifulSoup, page_url: str = ""):
                   "entry", "news-detail", "news-content", "pagebody",
                   "body", "text", "news", "info", "main", "container"]
     matched_blocks = []
+    # 策略2.0: <main> 标签（HTML5 语义正文容器）。
+    # 现代 SPA/Vue 站点的正文常整体包在 <main> 里，各 section 无 content_kw
+    # 关键词（如 class="py-16 lg:py-24 bg-ocean-50"），按 class 匹配会漏掉它们。
+    for el in soup.find_all("main"):
+        if _is_noise(el):
+            continue
+        text_len = len(el.get_text(strip=True))
+        if text_len < 100:
+            continue
+        ld = _link_density(el)
+        if ld > 0.3:
+            continue
+        if _has_footer_features(el):
+            continue
+        matched_blocks.append((el, text_len, ld))
     for kw in content_kw:
         for el in soup.find_all(["div", "section", "main"], class_=re.compile(kw, re.I)):
             if _is_noise(el):
@@ -2566,7 +2585,9 @@ def _build_structured_content(rescued_html: str, page_url: str = "") -> str:
         if hasattr(child, 'name') and child.name is not None:
             # 保留块级元素
             tag_name = child.name.lower()
-            if tag_name in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'div', 'img', 'table', 'ul', 'ol', 'blockquote', 'pre'):
+            if tag_name in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'div', 'img',
+                            'table', 'ul', 'ol', 'blockquote', 'pre',
+                            'main', 'section', 'article'):
                 # 再次检查：如果是噪音块则跳过
                 if _is_noise_block(child):
                     continue
