@@ -445,11 +445,6 @@ class HttpxPlaywrightFetcher(FetcherRouterInterface):
 
         for attempt in range(3):
             try:
-                # ★ 每次 httpx 请求前随机延迟
-                hdelay = self.request_delay * random.uniform(0.8, 1.5)
-                agent_logger.info(f"[LangGraph MA] 模拟人类思考中... 延迟 {hdelay:.2f} 秒 (httpx)")
-                await asyncio.sleep(hdelay)
-
                 resp = await client.get(
                     url,
                     headers={
@@ -536,11 +531,6 @@ class HttpxPlaywrightFetcher(FetcherRouterInterface):
 
         loop = asyncio.get_running_loop()
         try:
-            # ★ Playwright 抓取前随机延迟
-            pdelay = self.request_delay * random.uniform(0.8, 1.5)
-            agent_logger.info(f"[LangGraph MA] 模拟人类思考中... 延迟 {pdelay:.2f} 秒 (playwright)")
-            await asyncio.sleep(pdelay)
-
             html, http_status, err = await loop.run_in_executor(
                 self._pw_executor, _fetch_with_playwright_sync, url, self.use_system_chrome
             )
