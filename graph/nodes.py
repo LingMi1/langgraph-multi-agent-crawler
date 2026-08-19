@@ -1904,6 +1904,43 @@ async def _download_and_encode(
                     f"[Graph::media] 提取防盗链 cookie {list(_new)}，带 Cookie 重试: {src[:60]}"
                 )
                 content, resp = await _fetch(src, _retry_hdrs, referer)
+            elif _anti:
+                # ★ cookie 过期分支：带缓存 cookie 仍被拦且无新下发 → cookie 已失效。
+                #   并发优化：其他任务可能已刷新缓存（与本次所用快照不同）→ 直接用新值重试
+                _cached_now = _ANTILEECH_COOKIES.get(_dom) or {}
+                if _cached_now and _cached_now != _anti:
+                    _fresh = {**(cookies or {}), **_cached_now}
+                    content, resp = await _fetch(
+                        src,
+                        {**headers, "Cookie": "; ".join(f"{k}={v}" for k, v in _fresh.items())},
+                        referer,
+                    )
+                else:
+                    # 空手过门卫（服务器必发新 Set-Cookie）→ 拿新票重试一次
+                    agent_logger.info(f"[Graph::media] 防盗链 cookie 疑似过期，裸请求刷新: {src[:60]}")
+                    _ANTILEECH_COOKIES.pop(_dom, None)
+                    _bare = {k: v for k, v in headers.items() if k.lower() != "cookie"}
+                    _bc, _br = await _fetch(src, _bare, referer)
+                    if _bc is not None:
+                        content, resp = _bc, _br
+                    elif _br is not None:
+                        _new2: Dict[str, str] = {}
+                        for _c in _br.headers.get_list("set-cookie"):
+                            _pair = _c.split(";", 1)[0].strip()
+                            if "=" in _pair:
+                                _n2, _v2 = _pair.split("=", 1)
+                                _new2[_n2] = _v2
+                        if _new2:
+                            _ANTILEECH_COOKIES.setdefault(_dom, {}).update(_new2)
+                            _fresh = {**(cookies or {}), **_ANTILEECH_COOKIES[_dom]}
+                            agent_logger.info(
+                                f"[Graph::media] 刷新防盗链 cookie {list(_new2)}，重试: {src[:60]}"
+                            )
+                            content, resp = await _fetch(
+                                src,
+                                {**headers, "Cookie": "; ".join(f"{k}={v}" for k, v in _fresh.items())},
+                                referer,
+                            )
 
         # ★ 防盗链 403 降级链：
         #   ① 原始页面 Referer → ② 图片同域 Referer → ③ 无 Referer 裸请求
