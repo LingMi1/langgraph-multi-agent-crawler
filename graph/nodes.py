@@ -1062,6 +1062,12 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
     # ── 图片抢救：修复路径/懒加载/CSS背景图/防盗链（必须在清洗之前执行） ──
     loop = asyncio.get_running_loop()
     raw_html = page.html  # 保留原始 HTML（分页提取等需要未处理的 DOM）
+
+    # ── 404 页面过滤：Web 服务器默认 404 页（Apache/nginx）无真实内容，直接丢弃 ──
+    if _looks_like_404(raw_html):
+        stats["skipped"] = stats.get("skipped", 0) + 1
+        agent_logger.info(f"[Graph::fetch_extract] 404 页面丢弃 | {url[:80]}")
+        return {"queue": queue, "stats": stats, "seen_url_keys": seen_keys}
     rescued, img_stats = await loop.run_in_executor(None, _rescue_images, page.html, url)
     rescued_html = rescued  # 保存抢救后的原始 HTML（后续图片合并用）
     page.html = rescued
@@ -1980,6 +1986,30 @@ def _looks_like_html(content: bytes) -> bool:
         or head.startswith(b"<!doctype")
         or b"http-equiv" in content[:200].lower()
     )
+
+
+def _looks_like_404(content: str) -> bool:
+    """判断 HTML 是否为 Web 服务器默认 404 错误页（Apache/nginx 等）。
+
+    典型签名（Apache）：
+      <title>404 Not Found</title>
+      <h1>Not Found</h1>
+      <p>The requested URL /xxx.html was not found on this server.</p>
+    这种页面没有真实内容，需在清洗/保存前丢弃，避免混入站点输出。
+    """
+    if not content:
+        return False
+    lower = content[:3000].lower()
+    # Apache 默认 404 最独特的签名
+    if "was not found on this server" in lower:
+        return True
+    # nginx/其它默认 404：标题含 "404 Not Found" 且正文极短
+    if "404 not found" in lower and "not found" in lower:
+        body_text = re.sub(r"<[^>]+>", " ", content)
+        body_text = re.sub(r"\s+", " ", body_text).strip()
+        if len(body_text) < 500:
+            return True
+    return False
 
 
 def _extract_meta_refresh_url(content: bytes) -> str:
@@ -3015,6 +3045,31 @@ def _strip_nav_noise(html: str) -> str:
         if not (el.find(class_="sub-nav")
                 or (el.find("h6") and re.search(r'网站首页|首页', t))):
             continue
+        if re.search(
+            r'\d{4}[-/年]\d{1,2}|共\s*\d+\s*条|第\s*\d+\s*页|下一页|\d{1,2}[-/]\d{1,2}', t
+        ):
+            continue
+        el.decompose()
+        removed += 1
+
+    # 8.4 电话/客服悬浮栏（zztzmjg 等建站模板 PhoneService_Bg#formbackground）
+    #     整块删除。该容器仅含导航词 <p>（网站首页/产品中心/联系我们/电话咨询）
+    #     + 悬浮图标 <img>（home.png/cpzs.png/qqkf.png/online.png），无正文内容，
+    #     且容器内图片已被替换为占位符 → 一并清除可同时消掉导航文本与占位图标。
+    #     安全阀：含标题标签或命中正文信号（日期/共条/页码）视为内容，不删。
+    _float_bar = re.compile(
+        r'(PhoneService_Bg|formbackground|float.?service|online.?service|kefu|\bkf\b)',
+        re.I,
+    )
+    for el in soup.find_all(["div", "section"]):
+        attrs = getattr(el, "attrs", None) or {}
+        cls = " ".join(attrs.get("class") or [])
+        cid = attrs.get("id") or ""
+        if not (_float_bar.search(cls) or _float_bar.search(cid)):
+            continue
+        if el.find(["h1", "h2", "h3", "h4", "h5", "h6"]):
+            continue
+        t = el.get_text(" ", strip=True)
         if re.search(
             r'\d{4}[-/年]\d{1,2}|共\s*\d+\s*条|第\s*\d+\s*页|下一页|\d{1,2}[-/]\d{1,2}', t
         ):
