@@ -451,7 +451,8 @@ def run_multi_agent(target_url: str,
 def run_langgraph_crawler(target_url: str,
                           concurrency: int = 5,
                           log_callback: Optional[Callable[[str], None]] = None,
-                          reset_memory: bool = False) -> int:
+                          reset_memory: bool = False,
+                          progress_callback: Optional[Callable[[int, int, str], None]] = None) -> int:
     """
     使用 LangGraph StateGraph 架构执行多 Agent 爬取。
 
@@ -465,6 +466,7 @@ def run_langgraph_crawler(target_url: str,
         concurrency:   保留参数（LangGraph 内部串行处理 queue）
         log_callback:  日志回调
         reset_memory:  是否重置该站点的 SQLite 记忆
+        progress_callback: 进度回调 (fetched, queue_len, url)
 
     Returns:
         成功保存的页面数
@@ -494,6 +496,7 @@ def run_langgraph_crawler(target_url: str,
             run_langgraph_crawler_core(
                 seed_url=target_url,
                 log_callback=log,
+                progress_callback=progress_callback,
             )
         )
         saved = stats.get("saved", 0)

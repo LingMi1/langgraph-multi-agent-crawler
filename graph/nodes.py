@@ -998,6 +998,14 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
         page.nav_path = nav_path
         page.depth = depth
         stats["fetched"] = stats.get("fetched", 0) + 1
+
+        # ★ 进度回调：每处理一页上报 (已处理页数, 队列剩余, 当前URL)，供 GUI 进度条使用
+        pcb = state.get("progress_callback")
+        if pcb:
+            try:
+                pcb(stats["fetched"], len(queue), url)
+            except Exception:
+                pass
     except Exception as e:
         agent_logger.warning(f"[Graph::fetch_extract] 抓取失败: {e}")
         stats["failed"] = stats.get("failed", 0) + 1

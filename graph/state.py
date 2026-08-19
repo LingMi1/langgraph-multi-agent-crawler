@@ -7,7 +7,7 @@ graph/state.py — LangGraph 多 Agent 爬虫全局状态定义
   - 状态字段分类清晰，每个节点只读写自己负责的部分
 """
 
-from typing import TypedDict, List, Dict, Any, Optional, Annotated
+from typing import TypedDict, List, Dict, Any, Optional, Annotated, Callable
 from pydantic import BaseModel, Field
 import operator
 
@@ -156,6 +156,7 @@ class CrawlerState(TypedDict, total=False):
     # ── 控制 ──
     error: str
     log_messages: Annotated[List[str], _list_append]
+    progress_callback: Optional[Callable]  # ★ 进度回调: (fetched, queue_len, url)，每处理一页调用一次
 
     # ── 停用信号 ──
     anti_crawl_blocked_urls: Dict[str, str]        # URL key → 拦截原因（反爬降级）

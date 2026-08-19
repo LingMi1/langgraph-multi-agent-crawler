@@ -57,6 +57,11 @@ class CrawlerGUI:
         self.platform_var = tk.StringVar()
         self.crawl_mode = tk.StringVar(value="traditional")
 
+        # ★ 进度条页面级状态（LangGraph 模式使用）
+        self._last_fetched = 0      # 当前站已处理页数（停止时保留显示用）
+        self._site_index = 0        # 当前站点序号（1-based）
+        self._site_total = 0        # 站点总数
+
         self._build_ui()
         self._auto_load_config()
 
@@ -353,7 +358,9 @@ class CrawlerGUI:
         if not valid_urls:
             self.log("❌ 所有网址均未通过预检，无任务可执行")
             self.root.after(0, lambda: messagebox.showinfo("预检结果", "所有网址均未通过预检，无任务可执行"))
-            self.root.after(0, self._reset_ui)
+            self.root.after(0, lambda: self._reset_ui(
+                complete=False,
+                label="无任务" if not self.should_stop else "已停止"))
             return
 
         # 开始实际爬取
@@ -379,7 +386,12 @@ class CrawlerGUI:
             # 目标切换边界
             self.log(f"\n{'='*20} 开始处理第 {i+1}/{total_targets} 个目标 {'='*20}")
             self.log(f"▶ 目标网址: {url}")
-            self._update_progress(i, total_targets, f"爬取中: {url[:60]}")
+            # ★ 进度条按「当前站内页面数」推进：进入新站时重置为 0，
+            #   由 LangGraph 进度回调（_lg_progress）逐页上报；跨站靠文案序号区分。
+            self._site_index = i + 1
+            self._site_total = total_targets
+            self._last_fetched = 0
+            self._update_progress(0, 1, f"爬取中 第{i+1}/{total_targets}个站: {url[:50]}")
 
             site_dir = None  # 记录当前网站的保存路径
             pages = 0
@@ -409,6 +421,7 @@ class CrawlerGUI:
                         concurrency=5,
                         log_callback=self._langgraph_log,
                         reset_memory=False,
+                        progress_callback=self._lg_progress,
                     ) or 0
 
                     # 推算输出目录（scout_node 创建的是 output/<netloc>，保留 www）
@@ -585,7 +598,17 @@ class CrawlerGUI:
             self.log(f"  {s}")
         self.log(f"总耗时: {mins}分{secs}秒")
         self.log(f"{'='*50}")
-        self.root.after(0, self._reset_ui)
+        if self.should_stop:
+            self.root.after(0, lambda: self._reset_ui(complete=False))
+        else:
+            self.root.after(0, self._reset_ui)
+
+    def _lg_progress(self, fetched, queue_len, url):
+        """LangGraph 页面级进度回调：fetched=已处理页数, queue_len=队列剩余页数"""
+        self._last_fetched = fetched
+        total = fetched + queue_len
+        label = f"爬取中 第{self._site_index}/{self._site_total}个站 · 已处理{fetched}页 剩{queue_len}页"
+        self._update_progress(fetched, total, label)
 
     def _langgraph_log(self, msg: str):
         """LangGraph 工作流的日志回调，转发到 GUI 日志窗口。自动识别反爬拦截日志"""
@@ -598,11 +621,15 @@ class CrawlerGUI:
             tag = "warn"
         self.log(msg, tag)
 
-    def _reset_ui(self):
+    def _reset_ui(self, complete: bool = True, label: str = ""):
         self.is_running = False
         self.btn_start.config(state=tk.NORMAL); self.btn_stop.config(state=tk.DISABLED)
-        self.progress_bar['value'] = 100
-        self.status_label.config(text="完成")
+        if complete:
+            self.progress_bar['value'] = 100
+            self.status_label.config(text="完成")
+        else:
+            # ★ 停止/无任务：保留实际进度，不假报 100%
+            self.status_label.config(text=label or f"已停止（处理到第 {self._last_fetched} 页）")
 
     # ==================== 日志与进度 ====================
 

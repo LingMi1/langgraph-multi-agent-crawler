@@ -150,6 +150,7 @@ async def run_crawler(
     seed_url: str,
     log_callback: Optional[Callable[[str], None]] = None,
     max_steps: int = 20000,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> dict:
     """
     运行 LangGraph 爬虫工作流。
@@ -161,6 +162,7 @@ async def run_crawler(
                       深层 BFS + 分页发现时单页列表可能消耗大量 step，
                       2000 会在队列尚未排空时被截断，导致 stats 全部丢失。
                       （仍设上限以防死循环）
+        progress_callback: 进度回调 (fetched, queue_len, url)，每处理一页调用一次
 
     Returns:
         最终状态中的 stats 字典
@@ -176,6 +178,7 @@ async def run_crawler(
     app = get_crawler_app()
     initial_state: CrawlerState = {
         "seed_url": seed_url,
+        "progress_callback": progress_callback,
     }
 
     try:
