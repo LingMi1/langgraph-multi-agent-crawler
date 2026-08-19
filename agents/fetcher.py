@@ -362,7 +362,7 @@ class HttpxPlaywrightFetcher(FetcherRouterInterface):
       4. httpx 返回内容 < 500 字节 → 自动触发 Playwright 降级
     """
 
-    def __init__(self, request_delay: float = 1.0, use_system_chrome: bool = False) -> None:
+    def __init__(self, request_delay: float = 0.0, use_system_chrome: bool = False) -> None:
         self._memory = UrlMemory()
         self._semaphore = asyncio.Semaphore(5)  # 并发控制
         self._playwright_checked = False
@@ -391,10 +391,11 @@ class HttpxPlaywrightFetcher(FetcherRouterInterface):
                 agent_logger.info(f"[FetcherRouter] 缓存命中: {url[:80]}")
                 return await self._html_to_pagedata(url, cached_html, "cached")
 
-        # ★ 请求延迟：模拟人类浏览节奏（Base_Delay * 随机波动系数）
-        delay = self.request_delay * random.uniform(0.8, 1.5)
-        agent_logger.info(f"[LangGraph MA] 模拟人类思考中... 延迟 {delay:.2f} 秒")
-        await asyncio.sleep(delay)
+        # ★ 请求延迟：模拟人类浏览节奏（Base_Delay * 随机波动系数）；≤0 = 全速直连
+        if self.request_delay > 0:
+            delay = self.request_delay * random.uniform(0.8, 1.5)
+            agent_logger.info(f"[LangGraph MA] 模拟人类思考中... 延迟 {delay:.2f} 秒")
+            await asyncio.sleep(delay)
 
         # 2. 确定抓取策略
         if profile.needs_js_render:
@@ -587,17 +588,35 @@ class HttpxPlaywrightFetcher(FetcherRouterInterface):
 # ============================================================================
 
 def _extract_title(html: str) -> str:
-    """从 HTML 中提取标题（同步，供 executor 调用）"""
+    """从 HTML 中提取标题（同步，供 executor 调用）
+
+    优先级：
+    1. 正文中的第一个 h1/h2/h3/h4（排除 header/nav 内的站点模板标题，如「秉承工匠精神」）
+    2. <title> 标签
+    3. header 中的 h1（最后兜底，仅当正文无任何标题时）
+    """
     try:
         soup = BeautifulSoup(html, "html.parser")
-        # 优先 h1
-        h1 = soup.find("h1")
-        if h1 and h1.get_text(strip=True):
-            return h1.get_text(strip=True)[:300]
-        # 其次 title
+
+        # 1. 正文标题：优先 article/main/body 内、不在 header/nav 中的 h 标签
+        for h_tag in ("h1", "h2", "h3", "h4"):
+            for node in soup.find_all(h_tag):
+                # 跳过 header/nav 内的模板标题（站点名/栏目名）
+                if node.find_parent(["header", "nav"]):
+                    continue
+                txt = node.get_text(strip=True)
+                if txt:
+                    return txt[:300]
+
+        # 2. title 标签
         title_tag = soup.find("title")
         if title_tag and title_tag.get_text(strip=True):
             return title_tag.get_text(strip=True)[:300]
+
+        # 3. 兜底：header 中的 h1
+        h1 = soup.find("h1")
+        if h1 and h1.get_text(strip=True):
+            return h1.get_text(strip=True)[:300]
     except Exception:
         pass
     return ""

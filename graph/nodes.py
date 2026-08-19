@@ -1272,6 +1272,7 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
         seen_hashes.append(content_hash)
 
     # ── nav_path 补全（优先级：BFS传递 > 面包屑 ≥2级 > URL路径推断 > 面包屑单级） ──
+    # ★ 面包屑日志去重：同一 nav_path 组合只打印首次（降噪，功能不变）
     if rescued_html and (not nav_path or nav_path == ["网站地图"]):
         breadcrumb_nav = _extract_breadcrumb_nav(rescued_html)
         if breadcrumb_nav and len(breadcrumb_nav) >= 2:
@@ -1281,10 +1282,13 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
                 if p and p != "网站地图" and p not in merged:
                     merged.append(p)
             if merged and merged != nav_path:
-                agent_logger.info(
-                    f"[Graph::fetch_extract] 面包屑推断 nav_path(≥2级): "
-                    f"{nav_path} → {merged} | {url[:60]}"
-                )
+                _bk = " ≥2 ".join(merged)
+                if _bk not in _BC_LOG_SEEN:
+                    _BC_LOG_SEEN.add(_bk)
+                    agent_logger.info(
+                        f"[Graph::fetch_extract] 面包屑推断 nav_path(≥2级): "
+                        f"{nav_path} → {merged} | {url[:60]}"
+                    )
                 nav_path = merged
                 cleaned.nav_path = list(merged)
         elif breadcrumb_nav and not _is_likely_page_title(breadcrumb_nav[0]):
@@ -1294,10 +1298,13 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
                     if p and p != "网站地图" and p not in merged:
                         merged.append(p)
                 if merged and merged != nav_path:
-                    agent_logger.info(
-                        f"[Graph::fetch_extract] 面包屑兜底 nav_path(单级): "
-                        f"{nav_path} → {merged} | {url[:60]}"
-                    )
+                    _bk = " 单 ".join(merged)
+                    if _bk not in _BC_LOG_SEEN:
+                        _BC_LOG_SEEN.add(_bk)
+                        agent_logger.info(
+                            f"[Graph::fetch_extract] 面包屑兜底 nav_path(单级): "
+                            f"{nav_path} → {merged} | {url[:60]}"
+                        )
                     nav_path = merged
                     cleaned.nav_path = list(merged)
     elif rescued_html:
@@ -1309,9 +1316,12 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
                 if p and p != "网站地图" and p not in merged:
                     merged.append(p)
             if merged and merged != nav_path:
-                agent_logger.info(
-                    f"[Graph::fetch_extract] 面包屑增强 nav_path: "
-                    f"{nav_path} → {merged} | {url[:60]}"
+                _bk = " 增强 ".join(merged)
+                if _bk not in _BC_LOG_SEEN:
+                    _BC_LOG_SEEN.add(_bk)
+                    agent_logger.info(
+                        f"[Graph::fetch_extract] 面包屑增强 nav_path: "
+                        f"{nav_path} → {merged} | {url[:60]}"
                 )
                 nav_path = merged
                 cleaned.nav_path = list(merged)
@@ -2457,8 +2467,6 @@ _TEMPLATE_CSS = """
 body{max-width:900px;margin:0 auto;padding:24px 20px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;font-size:16px;line-height:1.85;color:#2c2c2c;background:#fff;-webkit-font-smoothing:antialiased}
 .page-header{border-bottom:2px solid #1a73e8;padding-bottom:16px;margin-bottom:28px}
 .page-header h1{font-size:26px;font-weight:700;color:#1a1a1a;line-height:1.4;margin-bottom:8px}
-.page-header .breadcrumb{font-size:13px;color:#888;margin-bottom:4px}
-.page-header .breadcrumb span{color:#1a73e8}
 .article-meta{font-size:13px;color:#999;margin-bottom:12px}
 .content h2{font-size:20px;font-weight:600;color:#1a1a1a;margin:28px 0 14px;padding-left:0}
 .content h3{font-size:17px;font-weight:600;color:#333;margin:22px 0 10px}
@@ -2613,6 +2621,10 @@ def _extract_url_path_nav(url: str) -> list:
 
     # 最多保留 4 级
     return cleaned[:4]
+
+
+# ★ 面包屑 nav_path 日志去重缓存：同一组合只打印首次（752 条 → 每组合 1 条）
+_BC_LOG_SEEN: Set[str] = set()
 
 
 def _extract_breadcrumb_nav(rescued_html: str) -> list:
@@ -2857,14 +2869,7 @@ def _build_template_html(structured_body: str, title: str, nav_path: list,
     """
     将结构化正文填入固定 CSS 模板，返回完整 HTML 文档。
     """
-    # 面包屑
-    breadcrumb_parts = []
-    for i, p in enumerate(nav_path):
-        if i < len(nav_path) - 1:
-            breadcrumb_parts.append(f"<span>{p}</span>")
-        else:
-            breadcrumb_parts.append(p)
-    breadcrumb_html = " &gt; ".join(breadcrumb_parts) if breadcrumb_parts else ""
+    # ★ 面包屑已按需求移除（nav_path 仍用于目录分类，但不再渲染到页面顶部）
 
     # 标题
     title_html = f"<h1>{title}</h1>" if title else ""
@@ -2885,7 +2890,6 @@ def _build_template_html(structured_body: str, title: str, nav_path: list,
 </head>
 <body>
 <header class="page-header">
-  <nav class="breadcrumb">{breadcrumb_html}</nav>
   {title_html}
 </header>
 <article class="content">
