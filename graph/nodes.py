@@ -3077,6 +3077,32 @@ def _strip_nav_noise(html: str) -> str:
             el.decompose()
             removed += 1
 
+    # 9. 纯 span/文本导航菜单（无 <a href> 链接）：
+    #    老站用 JS 渲染下拉菜单（如 zhengbang 的 h_nav/h_b_nav），菜单项是
+    #    <li><span>栏目</span></li> 没有链接，规则 7/8 的链接数与关键词判断均失效，
+    #    视觉上就是页面顶部的"首页 > 关于正邦 > 集团简介…"多级导航。
+    #    安全阀：有链接不删（交给规则 7/8）；含 h1-h6 不删；li < 3 不删；文本 > 800 不删。
+    _nav_span = re.compile(
+        r'(h_nav|h_b_nav|nav_wraper|nav_j|_nav|nav_|mainnav|footnav)', re.I
+    )
+    for el in soup.find_all(["div", "ul", "ol", "nav"]):
+        attrs = getattr(el, "attrs", None) or {}
+        cls = " ".join(attrs.get("class") or [])
+        cid = attrs.get("id") or ""
+        if not (_nav_span.search(cls) or _nav_span.search(cid)):
+            continue
+        if el.find(["h1", "h2", "h3", "h4", "h5", "h6"]):
+            continue
+        if el.find_all("a", href=True):
+            continue
+        if len(el.find_all("li")) < 3:
+            continue
+        t = el.get_text(" ", strip=True)
+        if not t or len(t) > 800:
+            continue
+        el.decompose()
+        removed += 1
+
     # 8.1 iYong 建站系统页头（logo/背景图区）整块删除：
     #     <div id="head_ver_1"> / class="modulebox box_head_v1" / id="webHeaderBox"，
     #     属于站点头部导航区而非正文。
