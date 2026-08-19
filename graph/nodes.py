@@ -1244,13 +1244,22 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
     # ── 构建模板 HTML（结构化 + 固定排版）──
     structured_body = _build_structured_content(rescued_html, url)
 
-    # ── 内容有效性检查：正文过短（纯二维码/空页面）→ 丢弃 ──
+    # ── 内容有效性检查：正文过短 / 二维码聚合页（官方微信/微博/微群等）→ 丢弃 ──
+    # 二维码聚合页特征：正文是"官方微信/官方微博/微群/易企秀"等二维码图集+链接列表，
+    # 无实质文章内容（zhengbang 的 /contact/zbwq.html 正邦微群、易企秀页等）。
     _check_text = re.sub(r'<[^>]+>', '', structured_body).strip()
     _check_text = re.sub(r'\s+', '', _check_text)  # 去掉所有空白
-    if len(_check_text) < 80:
+    _QR_PAGE_RE = re.compile(
+        r'(官方微信|官方微博|微群|易企秀|扫码|二维码|关注公众号|微信公众号)', re.I
+    )
+    _is_qr_page = bool(
+        _QR_PAGE_RE.search(cleaned.title or "")
+        or _QR_PAGE_RE.search(_check_text)
+    )
+    if len(_check_text) < 80 or (_is_qr_page and len(_check_text) < 200):
         agent_logger.info(
-            f"[Graph::fetch_extract] 正文内容过短({len(_check_text)}字)，"
-            f"丢弃空/二维码页面 | {url[:60]}"
+            f"[Graph::fetch_extract] 正文过短({len(_check_text)}字)"
+            f"{'/二维码聚合页' if _is_qr_page else ''}，丢弃 | {url[:60]}"
         )
         stats["skipped"] = stats.get("skipped", 0) + 1
         return {"queue": queue, "stats": stats, "seen_url_keys": seen_keys}
