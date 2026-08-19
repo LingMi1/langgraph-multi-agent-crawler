@@ -2823,8 +2823,9 @@ def _strip_nav_noise(html: str) -> str:
         r'globalnav|global-nav|channel-nav|channelnav)', re.I
     )
     for el in soup.find_all(["div", "ul", "ol", "nav", "td"]):
-        cls = " ".join(el.get("class") or [])
-        cid = el.get("id") or ""
+        attrs = getattr(el, "attrs", None) or {}
+        cls = " ".join(attrs.get("class") or [])
+        cid = attrs.get("id") or ""
         if not (_nav_container.search(cls) or _nav_container.search(cid)):
             continue
         if el.find(["h1", "h2", "h3", "h4", "h5", "h6"]):
@@ -2833,6 +2834,19 @@ def _strip_nav_noise(html: str) -> str:
         if not t or len(t) > 200:
             continue
         links = el.find_all("a", href=True)
+        # JS 模板菜单：菜单项是 span/li 模板类（navItem/navbarList/menuItem...），
+        # 无 <a href> 链接（链接数=0），链接数判断失效。
+        # 典型如 iYong 建站系统 <div id="menu_ver_1"> -> <li class="navItem icon-navItem">。
+        # 安全阀：命中正文信号（日期/共条/页码）视为内容列表，不删。
+        template_menu = bool(
+            el.select("[class*=navItem], [class*=navbarList], [class*=menuItem], [class*=nav_list]")
+        )
+        if template_menu and not re.search(
+            r'\d{4}[-/年]\d{1,2}|共\s*\d+\s*条|第\s*\d+\s*页|下一页|\d{1,2}[-/]\d{1,2}', t
+        ):
+            el.decompose()
+            removed += 1
+            continue
         if len(links) < 3:
             continue
         internal = sum(
@@ -2843,6 +2857,34 @@ def _strip_nav_noise(html: str) -> str:
         if internal >= 3:
             el.decompose()
             removed += 1
+
+    # 8.1 iYong 建站系统页头（logo/背景图区）整块删除：
+    #     <div id="head_ver_1"> / class="modulebox box_head_v1" / id="webHeaderBox"，
+    #     属于站点头部导航区而非正文。
+    #     安全阀：含 h1-h6、文本>200、命中正文信号（日期/共条/页码）不删。
+    _head_container = re.compile(
+        r'(box_head_v1|webHeaderBox|webHeader|head_ver_\d|'
+        r'box_language_v1|lang_ver_\d|langlist|webLanguage)', re.I
+    )
+    for el in soup.find_all(["div", "section"]):
+        attrs = getattr(el, "attrs", None) or {}
+        cls = " ".join(attrs.get("class") or [])
+        cid = attrs.get("id") or ""
+        if not (_head_container.search(cls) or _head_container.search(cid)):
+            continue
+        if el.find(["h1", "h2", "h3", "h4", "h5", "h6"]):
+            continue
+        t = el.get_text(" ", strip=True)
+        # 头部区通常只有 logo 图片、无文本（t 为空），属正常情况，空文本也删；
+        # 仅当文本>200（疑似内容区）才放行。
+        if len(t) > 200:
+            continue
+        if re.search(
+            r'\d{4}[-/年]\d{1,2}|共\s*\d+\s*条|第\s*\d+\s*页|下一页|\d{1,2}[-/]\d{1,2}', t
+        ):
+            continue
+        el.decompose()
+        removed += 1
 
     if removed:
         agent_logger.info(f"[Graph::clean] 去除导航栏残留 {removed} 处")
