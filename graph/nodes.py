@@ -1497,6 +1497,12 @@ _MAX_IMAGE_BYTES = 2 * 1024 * 1024
 #   同一图片在第 5 个页面起被全局去重跳过时，直接复用缓存，避免生成破图占位符。
 _GLOBAL_B64_CACHE: Dict[str, str] = {}
 
+# ★ 站点级防盗链 cookie 缓存：域名 → {cookie_name: value}。
+#   eWebSoft 类站（如 harbin-electric）对被拦截的图片请求返回
+#   meta-refresh 自引用 HTML，同时 Set-Cookie: AntiLeech=xxx；
+#   带上该 cookie 后再请求即放行真图。每站只需触发 1 次探测请求。
+_ANTILEECH_COOKIES: Dict[str, Dict[str, str]] = {}
+
 # 失败图片占位符（内嵌 SVG: 灰色背景 + "图片加载失败" 提示）
 _FAILED_IMG_PLACEHOLDER = (
     "data:image/svg+xml;charset=utf-8,"
@@ -1854,13 +1860,43 @@ async def _download_and_encode(
         "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
         **extra_headers,
     }
-    # 添加 Cookie（来自原始页面请求的 session）
-    cookie_dict = cookies or {}
+    # 添加 Cookie（原始页面 session cookie + 站点防盗链 cookie 缓存）
+    from urllib.parse import urlparse as _up
+    _dom = _up(src).netloc
+    cookie_dict = dict(cookies or {})
+    _anti = _ANTILEECH_COOKIES.get(_dom)
+    if _anti:
+        for _k, _v in _anti.items():
+            cookie_dict.setdefault(_k, _v)
     if cookie_dict:
         headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in cookie_dict.items())
 
     try:
         content, resp = await _fetch(src, headers, referer)
+
+        # ★ eWebSoft AntiLeech 防盗链：拦截响应(200 + meta-refresh HTML)会下发
+        #   Set-Cookie: AntiLeech=xxx，提取后带 Cookie 重试 1 次即可拿到真图
+        #   （harbin-electric 等站）。只重试一次，避免死循环。
+        if content is None and resp is not None and resp.status_code == 200:
+            _sc = resp.headers.get_list("set-cookie")
+            _new: Dict[str, str] = {}
+            for _c in _sc:
+                _pair = _c.split(";", 1)[0].strip()
+                if "=" in _pair:
+                    _n, _v = _pair.split("=", 1)
+                    _new[_n] = _v
+            if _new:
+                _ANTILEECH_COOKIES.setdefault(_dom, {}).update(_new)
+                _all_cookies = {**(cookies or {}), **_ANTILEECH_COOKIES[_dom]}
+                _retry_hdrs = {
+                    **headers,
+                    "Cookie": "; ".join(f"{k}={v}" for k, v in _all_cookies.items()),
+                }
+                agent_logger.info(
+                    f"[Graph::media] 提取防盗链 cookie {list(_new)}，带 Cookie 重试: {src[:60]}"
+                )
+                content, resp = await _fetch(src, _retry_hdrs, referer)
+
         # ★ 防盗链 403 降级链：
         #   ① 原始页面 Referer → ② 图片同域 Referer → ③ 无 Referer 裸请求
         if content is None and resp is not None and resp.status_code == 403:
