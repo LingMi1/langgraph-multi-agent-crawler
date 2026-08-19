@@ -2918,6 +2918,32 @@ def _strip_nav_noise(html: str) -> str:
         el.decompose()
         removed += 1
 
+    # 8.3 全站导航菜单容器（哈电 site-menu 等 Vue 模板）整块删除。
+    #     菜单项是 span/li 无 <a href>（链接数判断失效），且菜单内含
+    #     <h6> 英文导航标题（About us / News center...）会触发第8步的
+    #     h1-h6 安全阀放行、文本又常超 200 字 → 旧规则全部漏删。
+    #     安全阀：命中正文信号（日期/共条/页码）视为内容列表，不删。
+    _site_nav = re.compile(
+        r'(site-menu|site_nav|global-menu|global_nav|main-menu|web-menu|topNavBar)', re.I
+    )
+    for el in soup.find_all(["div", "nav", "header"]):
+        attrs = getattr(el, "attrs", None) or {}
+        cls = " ".join(attrs.get("class") or [])
+        cid = attrs.get("id") or ""
+        if not (_site_nav.search(cls) or _site_nav.search(cid)):
+            continue
+        # 结构签名：含 sub-nav 子菜单容器，或含"网站首页/首页"导航词且含 <h6> 英文标题
+        t = el.get_text(" ", strip=True)
+        if not (el.find(class_="sub-nav")
+                or (el.find("h6") and re.search(r'网站首页|首页', t))):
+            continue
+        if re.search(
+            r'\d{4}[-/年]\d{1,2}|共\s*\d+\s*条|第\s*\d+\s*页|下一页|\d{1,2}[-/]\d{1,2}', t
+        ):
+            continue
+        el.decompose()
+        removed += 1
+
     if removed:
         agent_logger.info(f"[Graph::clean] 去除导航栏残留 {removed} 处")
 
