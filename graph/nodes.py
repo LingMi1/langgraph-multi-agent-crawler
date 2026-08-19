@@ -1795,16 +1795,24 @@ async def _fetch(
     cur_url = src
     resp: Optional[httpx.Response] = None
     for _ in range(4):  # 原始请求 1 次 + meta-refresh 跟随最多 3 次
-        try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(8.0, connect=3.0),
-                follow_redirects=True,
-                headers=headers,
-            ) as client:
-                resp = await client.get(cur_url)
-        except Exception as e:
-            agent_logger.info(f"[Graph::media] 请求异常: {cur_url[:80]} | {e}")
-            return None, None
+        # ★ 瞬时异常重试：高并发下小站偶发 ConnectTimeout/连接重置，退避重试 2 次
+        for _attempt in range(3):
+            try:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(8.0, connect=3.0),
+                    follow_redirects=True,
+                    headers=headers,
+                ) as client:
+                    resp = await client.get(cur_url)
+                break
+            except Exception as e:
+                if _attempt >= 2:
+                    agent_logger.info(
+                        f"[Graph::media] 请求异常(重试{_attempt}次后放弃): "
+                        f"{cur_url[:80]} | {type(e).__name__}: {e}"
+                    )
+                    return None, None
+                await asyncio.sleep(1.0 + _attempt * 1.5)
 
         if resp.status_code != 200:
             return None, resp
