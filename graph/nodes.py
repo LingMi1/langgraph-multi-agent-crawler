@@ -1731,6 +1731,63 @@ def _should_embed(src: str, tag=None) -> bool:
     return True
 
 
+async def _fetch(
+    src: str, headers: dict, referer: str
+) -> Tuple[Optional[bytes], Optional[httpx.Response]]:
+    """
+    单次图片请求 + meta-refresh 跟随。
+
+    - 非 200 状态码直接返回 (None, resp)，由调用方决定是否换 Referer 重试
+    - 200 但内容是 HTML（meta refresh 跳转页）→ 最多跟随 3 次
+    - 跟随过程中 Referer 随跳转链更新，应对链式防盗链
+    - referer 为空/None 时不携带 Referer 头（裸请求降级）
+
+    Returns:
+        (content_bytes | None, response | None)
+        content 为 None 且 resp 非 None 时，调用方可通过 resp.status_code 决策重试。
+    """
+    if referer:
+        headers = {**headers, "Referer": referer}
+    else:
+        headers = {k: v for k, v in headers.items() if k.lower() != "referer"}
+
+    cur_url = src
+    resp: Optional[httpx.Response] = None
+    for _ in range(4):  # 原始请求 1 次 + meta-refresh 跟随最多 3 次
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(8.0, connect=3.0),
+                follow_redirects=True,
+                headers=headers,
+            ) as client:
+                resp = await client.get(cur_url)
+        except Exception as e:
+            agent_logger.info(f"[Graph::media] 请求异常: {cur_url[:80]} | {e}")
+            return None, None
+
+        if resp.status_code != 200:
+            return None, resp
+
+        content = resp.content
+        if not _looks_like_html(content):
+            return content, resp
+
+        # HTML 跳转页 → 解析 meta refresh 目标并跟随
+        next_url = _extract_meta_refresh_url(content)
+        if not next_url:
+            return None, resp
+        nxt = urljoin(cur_url, next_url)
+        if nxt == cur_url:
+            # 自引用跳转（防热链陷阱/死循环）→ 放弃
+            agent_logger.info(f"[Graph::media] meta refresh 自引用，放弃: {cur_url[:80]}")
+            return None, resp
+        cur_url = nxt
+        if referer:
+            headers["Referer"] = cur_url  # 随链更新，应对链式防盗链
+        await asyncio.sleep(1.2)
+    return None, resp  # 跟随 3 次仍为 HTML
+
+
 async def _download_and_encode(
     src: str, page_url: str, referer: str,
     user_agent: str, extra_headers: dict, cookies: dict = None,
@@ -1768,63 +1825,59 @@ async def _download_and_encode(
         headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in cookie_dict.items())
 
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=3.0), follow_redirects=True) as client:
-            resp = await client.get(src, headers=headers)
-            resp.raise_for_status()
+        content, resp = await _fetch(src, headers, referer)
+        # ★ 防盗链 403 降级链：
+        #   ① 原始页面 Referer → ② 图片同域 Referer → ③ 无 Referer 裸请求
+        if content is None and resp is not None and resp.status_code == 403:
+            from urllib.parse import urlparse as _up
+            _up_src = _up(src)
+            _same_domain = bool(referer) and _up(referer).netloc == _up_src.netloc
+            if not _same_domain:
+                src_referer = f"{_up_src.scheme}://{_up_src.netloc}/"
+                agent_logger.info(f"[Graph::media] 403 防盗链，改用源站 Referer 重试: {src[:60]}")
+                content, resp = await _fetch(src, headers, src_referer)
+            if content is None and resp is not None and resp.status_code == 403:
+                agent_logger.info(f"[Graph::media] 仍 403，改用无 Referer 裸请求: {src[:60]}")
+                content, resp = await _fetch(src, headers, None)
+        if content is None:
+            return None, ""
 
-            content = resp.content
+        # 重试后仍是 HTML（非图片）→ 放弃，避免把跳转页当图片内嵌
+        if _looks_like_html(content):
+            agent_logger.info(f"[Graph::media] meta refresh 重试后仍为 HTML，放弃: {src[:80]}")
+            return None, ""
 
-            # ★ meta refresh 反爬：部分站点（如 harbin-electric.com）对图片首次请求
-            #   返回 <meta http-equiv="refresh" content="1; URL=..."> 跳转页，
-            #   httpx 不执行 meta refresh，需解析目标 URL 并延迟后重试才返回真实图片。
-            for _attempt in range(3):
-                if not _looks_like_html(content):
-                    break
-                redirect_url = _extract_meta_refresh_url(content)
-                if not redirect_url:
-                    break
-                await asyncio.sleep(1.2)
-                target = urljoin(src, redirect_url)
-                resp = await client.get(target, headers=headers)
-                resp.raise_for_status()
-                content = resp.content
+        if len(content) > _MAX_IMAGE_BYTES:
+            agent_logger.info(f"[Graph::media] 图片过大 ({len(content)}B) 跳过: {src[:80]}")
+            return None, ""
 
-            # 重试后仍是 HTML（非图片）→ 放弃，避免把跳转页当图片内嵌
-            if _looks_like_html(content):
-                agent_logger.info(f"[Graph::media] meta refresh 重试后仍为 HTML，放弃: {src[:80]}")
-                return None, ""
+        # MIME 检测
+        mime = _detect_mime(resp, src)
+        if not mime:
+            return None, ""
 
-            if len(content) > _MAX_IMAGE_BYTES:
-                agent_logger.info(f"[Graph::media] 图片过大 ({len(content)}B) 跳过: {src[:80]}")
-                return None, ""
-
-            # MIME 检测
-            mime = _detect_mime(resp, src)
-            if not mime:
-                return None, ""
-
-            # ★ 文件特征辅助判断：正方形 + < 30KB → 极可能是 Logo/图标
-            if len(content) < 30 * 1024:
-                is_square = _is_square_image(content)
-                if is_square:
-                    src_lower = src.lower()
-                    # URL 含装饰关键词 OR alt 低信息量 → 双重确认后排除
-                    if any(kw in src_lower for kw in _IMG_BLOCK_URL_KW):
-                        agent_logger.info(f"[Graph::media] 过滤疑似图标(SQ+<30K+URL): {src[:60]}")
-                        return None, ""
-
-            # ★ 全局 MD5 去重
-            if global_seen_hashes is not None:
-                img_md5 = hashlib.md5(content).hexdigest()
-                count = global_seen_hashes.get(img_md5, 0) + 1
-                global_seen_hashes[img_md5] = count
-                if count >= 5:
-                    agent_logger.info(f"[Graph::media] 全站共用图({count}次) 跳过: {src[:60]}")
+        # ★ 文件特征辅助判断：正方形 + < 30KB → 极可能是 Logo/图标
+        if len(content) < 30 * 1024:
+            is_square = _is_square_image(content)
+            if is_square:
+                src_lower = src.lower()
+                # URL 含装饰关键词 OR alt 低信息量 → 双重确认后排除
+                if any(kw in src_lower for kw in _IMG_BLOCK_URL_KW):
+                    agent_logger.info(f"[Graph::media] 过滤疑似图标(SQ+<30K+URL): {src[:60]}")
                     return None, ""
 
-            import base64
-            b64 = base64.b64encode(content).decode("ascii")
-            return b64, mime
+        # ★ 全局 MD5 去重
+        if global_seen_hashes is not None:
+            img_md5 = hashlib.md5(content).hexdigest()
+            count = global_seen_hashes.get(img_md5, 0) + 1
+            global_seen_hashes[img_md5] = count
+            if count >= 5:
+                agent_logger.info(f"[Graph::media] 全站共用图({count}次) 跳过: {src[:60]}")
+                return None, ""
+
+        import base64
+        b64 = base64.b64encode(content).decode("ascii")
+        return b64, mime
 
     except Exception as e:
         agent_logger.info(f"[Graph::media] 下载失败: {src[:80]} | {e}")
