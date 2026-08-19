@@ -1942,6 +1942,15 @@ async def _download_and_encode(
                                 referer,
                             )
 
+        # ★ 可重试状态码（429 限流 / 5xx 瞬时故障）：退避重试一次。
+        #   404 等永久失败不重试；403 走下方 Referer 降级链。
+        if content is None and resp is not None and resp.status_code in (429, 500, 502, 503, 504):
+            agent_logger.info(
+                f"[Graph::media] HTTP {resp.status_code}，退避后重试: {src[:60]}"
+            )
+            await asyncio.sleep(2.0)
+            content, resp = await _fetch(src, headers, referer)
+
         # ★ 防盗链 403 降级链：
         #   ① 原始页面 Referer → ② 图片同域 Referer → ③ 无 Referer 裸请求
         if content is None and resp is not None and resp.status_code == 403:
@@ -1956,6 +1965,9 @@ async def _download_and_encode(
                 agent_logger.info(f"[Graph::media] 仍 403，改用无 Referer 裸请求: {src[:60]}")
                 content, resp = await _fetch(src, headers, None)
         if content is None:
+            # 永久失败（404 等）也留一条日志，避免静默失败无法诊断
+            _code = resp.status_code if resp is not None else "ERR"
+            agent_logger.info(f"[Graph::media] 下载放弃 HTTP {_code}: {src[:80]}")
             return None, ""
 
         # 重试后仍是 HTML（非图片）→ 放弃，避免把跳转页当图片内嵌
