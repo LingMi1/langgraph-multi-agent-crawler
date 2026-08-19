@@ -508,13 +508,19 @@ def run_langgraph_crawler(target_url: str,
             if len(blocked_urls) > 10:
                 log(f"  ... 还有 {len(blocked_urls) - 10} 个")
         # 兜底：如果 stats 不包含 saved，从磁盘统计 HTML 文件数
+        # 实际输出目录由 scout_node 创建: output/<netloc>（保留 www），
+        # 需同时兼容 output/<netloc> 与 output/<去掉 www 的 netloc> 两种历史目录。
         if saved == 0:
-            domain = parsed.netloc.replace("www.", "").replace(":", "_")
-            out_dir = os.path.join("output", domain)
-            if os.path.isdir(out_dir):
-                saved = sum(1 for dp, _, fs in os.walk(out_dir) for f in fs if f.endswith('.html'))
-                if saved > 0:
-                    log(f"  📁 (从磁盘恢复页数: {saved})")
+            domain = parsed.netloc.replace(":", "_")
+            for cand in (os.path.join("output", domain),
+                         os.path.join("output", domain.replace("www.", ""))):
+                if os.path.isdir(cand):
+                    cnt = sum(1 for dp, _, fs in os.walk(cand)
+                              for f in fs if f.endswith('.html'))
+                    if cnt > 0:
+                        saved = cnt
+                        log(f"  📁 (从磁盘恢复页数: {saved}) @ {cand}")
+                        break
         log(f"\nLangGraph 爬虫完成 | 成功保存: {saved} 页")
         return saved
     except Exception as e:

@@ -2886,6 +2886,38 @@ def _strip_nav_noise(html: str) -> str:
         el.decompose()
         removed += 1
 
+    # 8.2 iYong 建站系统服务栏/内嵌全站菜单残留整块删除。
+    #     - <div id="service_ver_1"> 底部悬浮服务栏：结构为
+    #       <li class="fitem_index"><span class="serviceItemName">首页</span> 等
+    #       （首页/电话/留言/地图），class/id 命中断言，无 <a href> 链接。
+    #     - <div class="menu"> 内嵌全站菜单：JS 渲染，菜单项是 span/li
+    #       无 <a href>（链接数判断失效），其二级菜单容器 .sec_m/.sec_l 是
+    #       iYong 独有结构签名，命中即删，避免误删普通 <div class="menu"> 正文。
+    _service_bar = re.compile(r'(service_ver_\d|box_service_v1|wapService)', re.I)
+    for el in soup.find_all(["div", "section"]):
+        attrs = getattr(el, "attrs", None) or {}
+        cls = " ".join(attrs.get("class") or [])
+        cid = attrs.get("id") or ""
+        if not (_service_bar.search(cls) or _service_bar.search(cid)):
+            continue
+        if el.find(["h1", "h2", "h3", "h4", "h5", "h6"]):
+            continue
+        el.decompose()
+        removed += 1
+
+    for el in soup.find_all("div", class_="menu"):
+        if not (el.find(class_="sec_m") or el.find(class_="sec_l")
+                or el.find(class_="first_li")):
+            continue
+        # 安全阀：命中正文信号（日期/共条/页码）视为内容，不删
+        t = el.get_text(" ", strip=True)
+        if re.search(
+            r'\d{4}[-/年]\d{1,2}|共\s*\d+\s*条|第\s*\d+\s*页|下一页|\d{1,2}[-/]\d{1,2}', t
+        ):
+            continue
+        el.decompose()
+        removed += 1
+
     if removed:
         agent_logger.info(f"[Graph::clean] 去除导航栏残留 {removed} 处")
 

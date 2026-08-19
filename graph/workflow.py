@@ -149,7 +149,7 @@ def get_crawler_app():
 async def run_crawler(
     seed_url: str,
     log_callback: Optional[Callable[[str], None]] = None,
-    max_steps: int = 2000,
+    max_steps: int = 20000,
 ) -> dict:
     """
     运行 LangGraph 爬虫工作流。
@@ -157,7 +157,10 @@ async def run_crawler(
     Args:
         seed_url:     种子 URL（站点首页）
         log_callback: 日志回调（可选，供 GUI 使用）
-        max_steps:    最大图执行步数（防止无限循环）
+        max_steps:    最大图执行步数（防止无限循环）。默认 20000：
+                      深层 BFS + 分页发现时单页列表可能消耗大量 step，
+                      2000 会在队列尚未排空时被截断，导致 stats 全部丢失。
+                      （仍设上限以防死循环）
 
     Returns:
         最终状态中的 stats 字典
@@ -184,9 +187,23 @@ async def run_crawler(
         )
     except Exception as e:
         import traceback
+        import os as _os
         log(f"❌ LangGraph 工作流异常: {e}")
         log(traceback.format_exc())
-        return {"pages_saved": 0, "error": str(e)}
+        # 兜底：异常中断时从磁盘统计已保存文件数，避免 stats 全部丢失
+        # （输出目录与 scout_node 保持一致: output/<netloc>）
+        try:
+            from urllib.parse import urlparse as _up
+            from config import LOCAL_BACKUP_DIR as _out_root
+            _dom = _up(seed_url).netloc.replace(":", "_")
+            _od = _os.path.join(_out_root, _dom)
+            _n = (sum(1 for _, _, fs in _os.walk(_od) for f in fs if f.endswith(".html"))
+                  if _os.path.isdir(_od) else 0)
+            if _n > 0:
+                log(f"  📁 (异常恢复: 磁盘已有 {_n} 个 HTML 文件)")
+            return {"pages_saved": _n, "saved": _n, "error": str(e)}
+        except Exception:
+            return {"pages_saved": 0, "error": str(e)}
 
     stats = final_state.get("stats", {})
     evaluation = final_state.get("evaluation", {})

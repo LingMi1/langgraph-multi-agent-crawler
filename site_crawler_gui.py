@@ -411,9 +411,9 @@ class CrawlerGUI:
                         reset_memory=False,
                     ) or 0
 
-                    # 推算输出目录
+                    # 推算输出目录（scout_node 创建的是 output/<netloc>，保留 www）
                     parsed_base = urlparse(url)
-                    domain = parsed_base.netloc.replace("www.", "").replace(":", "_")
+                    domain = parsed_base.netloc.replace(":", "_")
                     site_dir = os.path.join("output", domain)
                     company_name = domain
 
@@ -442,9 +442,9 @@ class CrawlerGUI:
                         reset_memory=False,
                     ) or 0
 
-                    # 推算输出目录
+                    # 推算输出目录（scout_node 创建的是 output/<netloc>，保留 www）
                     parsed_base = urlparse(url)
-                    domain = parsed_base.netloc.replace("www.", "").replace(":", "_")
+                    domain = parsed_base.netloc.replace(":", "_")
                     site_dir = os.path.join("output", domain)
                     company_name = domain
 
