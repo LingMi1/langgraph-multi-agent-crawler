@@ -603,11 +603,16 @@ class CrawlerGUI:
         else:
             self.root.after(0, self._reset_ui)
 
-    def _lg_progress(self, fetched, queue_len, url):
-        """LangGraph 页面级进度回调：fetched=已处理页数, queue_len=队列剩余页数"""
+    def _lg_progress(self, fetched, queue_len, url, phase="fetch"):
+        """LangGraph 进度回调：fetched=已处理页数, queue_len=剩余/总数页数"""
         self._last_fetched = fetched
         total = fetched + queue_len
-        label = f"爬取中 第{self._site_index}/{self._site_total}个站 · 已处理{fetched}页 剩{queue_len}页"
+        if phase == "media":
+            label = f"内嵌图片 {fetched}/{total} 页"
+        elif phase == "storage":
+            label = "写入文件..."
+        else:
+            label = f"爬取中 第{self._site_index}/{self._site_total}个站 · 已处理{fetched}页 剩{queue_len}页"
         self._update_progress(fetched, total, label)
 
     def _langgraph_log(self, msg: str):

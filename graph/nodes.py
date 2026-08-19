@@ -1003,7 +1003,7 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
         pcb = state.get("progress_callback")
         if pcb:
             try:
-                pcb(stats["fetched"], len(queue), url)
+                pcb(stats["fetched"], len(queue), url, "fetch")
             except Exception:
                 pass
     except Exception as e:
@@ -1544,6 +1544,9 @@ async def media_processor_node(state: CrawlerState) -> dict:
     # 记录已处理（已内嵌）的页面 URL，供后续 re-enqueue 时避免覆盖
     media_processed_urls: List[str] = []
 
+    # ★ 进度回调（GUI 进度条）：media 阶段逐页上报
+    _pcb = state.get("progress_callback")
+
     async def _process_one(i: int, row: dict):
         nonlocal total_processed, total_failed
         if not row or not isinstance(row, dict):
@@ -1572,6 +1575,13 @@ async def media_processor_node(state: CrawlerState) -> dict:
                 if url:
                     media_processed_urls.append(url)
 
+                # ★ 进度回调：每处理完一页上报 (已处理页数, 总页数, URL, "media")
+                if _pcb:
+                    try:
+                        _pcb(i + 1, len(results), url, "media")
+                    except Exception:
+                        pass
+
                 if processed or failed:
                     agent_logger.info(
                         f"[Graph::media] [{i+1}/{len(results)}] "
@@ -1584,6 +1594,13 @@ async def media_processor_node(state: CrawlerState) -> dict:
         _process_one(i, row) for i, row in enumerate(results)
         if row and isinstance(row, dict) and row.get("html")
     ])
+
+    # ★ 进度回调：media 全部完成，进入 storage（写文件）阶段
+    if _pcb:
+        try:
+            _pcb(len(results), len(results), "", "storage")
+        except Exception:
+            pass
 
     # ── 重新写入 HTML 文件（覆盖 Base64 之前的版本） ──
     _re_write_html_files(results, output_dir)

@@ -162,7 +162,8 @@ async def run_crawler(
                       深层 BFS + 分页发现时单页列表可能消耗大量 step，
                       2000 会在队列尚未排空时被截断，导致 stats 全部丢失。
                       （仍设上限以防死循环）
-        progress_callback: 进度回调 (fetched, queue_len, url)，每处理一页调用一次
+        progress_callback: 进度回调 (fetched, queue_len, url, phase)，
+                          phase ∈ {"fetch","media","storage"}，每处理一页调用一次
 
     Returns:
         最终状态中的 stats 字典
