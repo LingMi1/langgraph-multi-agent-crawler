@@ -1493,6 +1493,10 @@ _IMG_SUSPICIOUS_ALT_RE = _re.compile(r'^[a-zA-Z0-9_\-\s\.]{1,9}$')
 # 最大图片大小 2MB（超过则保留原始链接）
 _MAX_IMAGE_BYTES = 2 * 1024 * 1024
 
+# ★ 全站共用图 base64 复用缓存：md5 → 首个页面已内嵌的 data 内容。
+#   同一图片在第 5 个页面起被全局去重跳过时，直接复用缓存，避免生成破图占位符。
+_GLOBAL_B64_CACHE: Dict[str, str] = {}
+
 # 失败图片占位符（内嵌 SVG: 灰色背景 + "图片加载失败" 提示）
 _FAILED_IMG_PLACEHOLDER = (
     "data:image/svg+xml;charset=utf-8,"
@@ -1897,17 +1901,27 @@ async def _download_and_encode(
                     agent_logger.info(f"[Graph::media] 过滤疑似图标(SQ+<30K+URL): {src[:60]}")
                     return None, ""
 
-        # ★ 全局 MD5 去重
+        # ★ 全局 MD5 去重：同一图片 ≥5 页出现 → 视为全站共用图。
+        #   此时若首个页面已成功内嵌，则复用缓存 base64（不重复下载、不生成破图占位）；
+        #   否则跳过（原行为），避免把导航/装饰图重复塞满每个页面。
         if global_seen_hashes is not None:
             img_md5 = hashlib.md5(content).hexdigest()
             count = global_seen_hashes.get(img_md5, 0) + 1
             global_seen_hashes[img_md5] = count
             if count >= 5:
+                cached = _GLOBAL_B64_CACHE.get(img_md5)
+                if cached:
+                    agent_logger.info(
+                        f"[Graph::media] 全站共用图({count}次) 复用已内嵌: {src[:60]}"
+                    )
+                    return cached, mime
                 agent_logger.info(f"[Graph::media] 全站共用图({count}次) 跳过: {src[:60]}")
                 return None, ""
 
         import base64
         b64 = base64.b64encode(content).decode("ascii")
+        if global_seen_hashes is not None:
+            _GLOBAL_B64_CACHE.setdefault(img_md5, b64)
         return b64, mime
 
     except Exception as e:
@@ -3074,6 +3088,44 @@ def _strip_nav_noise(html: str) -> str:
             r'\d{4}[-/年]\d{1,2}|共\s*\d+\s*条|第\s*\d+\s*页|下一页|\d{1,2}[-/]\d{1,2}', t
         ):
             continue
+        el.decompose()
+        removed += 1
+
+    # 8.5 站点页脚（底部导航 / 扫一扫加微信 / 电话条）整块删除。
+    #     zztzmjg 等建站模板：<section class="seventh"><div class="container"> 内含
+    #     grid_5 产品链接 + grid_4 "底部导航" + grid_3.mrdede(ul.follow "扫一扫加微信好友关注")
+    #     + div.bottom-tel 电话条（177 0371 9710）。均为模板噪音（重复导航/联系方式/二维码），
+    #     整块删除可同时消掉电话、扫一扫字眼与页脚二维码占位图。
+    #     签名：容器（含自身）含 bottom-tel 电话条 或 ul.follow 关注区 或 "底部导航"+"扫一扫"。
+    #     只删最外层命中容器（避免嵌套容器重复计次）；命中正文信号视为内容，不删。
+    _bt_re = re.compile(r'bottom-tel', re.I)
+    _follow_re = re.compile(r'^follow$', re.I)
+    _to_kill = []
+    for el in soup.find_all(["div", "section", "footer", "ul"]):
+        attrs = getattr(el, "attrs", None) or {}
+        cls = " ".join(attrs.get("class") or [])
+        cid = attrs.get("id") or ""
+        self_bt = bool(_bt_re.search(cls) or _bt_re.search(cid))
+        self_follow = bool(_follow_re.search(cls) or _follow_re.search(cid))
+        t = el.get_text(" ", strip=True)
+        has_bt = self_bt or el.find(class_=_bt_re) is not None
+        has_follow = self_follow or el.find(class_=_follow_re) is not None
+        if not (has_bt or has_follow or ("底部导航" in t and "扫一扫" in t)):
+            continue
+        # 安全阀：命中正文信号（日期/共条/页码）视为内容，不删
+        if re.search(
+            r'\d{4}[-/年]\d{1,2}|共\s*\d+\s*条|第\s*\d+\s*页|下一页|\d{1,2}[-/]\d{1,2}', t
+        ):
+            continue
+        # 若已有更外层容器命中，跳过（避免重复删除/重复计次）
+        p = el.parent
+        while p is not None and getattr(p, "name", None):
+            if p in _to_kill:
+                break
+            p = p.parent
+        else:
+            _to_kill.append(el)
+    for el in _to_kill:
         el.decompose()
         removed += 1
 
