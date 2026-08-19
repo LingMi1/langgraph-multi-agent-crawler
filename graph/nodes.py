@@ -1522,16 +1522,8 @@ _GLOBAL_B64_CACHE: Dict[str, str] = {}
 #   带上该 cookie 后再请求即放行真图。每站只需触发 1 次探测请求。
 _ANTILEECH_COOKIES: Dict[str, Dict[str, str]] = {}
 
-# 失败图片占位符（内嵌 SVG: 灰色背景 + "图片加载失败" 提示）
-_FAILED_IMG_PLACEHOLDER = (
-    "data:image/svg+xml;charset=utf-8,"
-    "%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='150'%3E"
-    "%3Crect width='300' height='150' fill='%23f5f5f5' stroke='%23ddd' stroke-width='1'/%3E"
-    "%3Ctext x='50%25' y='45%25' text-anchor='middle' font-family='sans-serif' font-size='14' fill='%23999'%3E"
-    "%E5%9B%BE%E7%89%87%E5%8A%A0%E8%BD%BD%E5%A4%B1%E8%B4%A5"
-    "%3C/text%3E"
-    "%3C/svg%3E"
-)
+# ── 失败图片处理：不再用占位符，直接删除图片及纯图片容器/说明文字 ──
+# 见 _remove_failed_img()
 
 
 async def media_processor_node(state: CrawlerState) -> dict:
@@ -1657,6 +1649,28 @@ async def media_processor_node(state: CrawlerState) -> dict:
 # 图片 Base64 嵌入核心逻辑
 # ============================================================================
 
+def _remove_failed_img(tag) -> None:
+    """删除下载失败的图片标签；若图片位于纯图片容器/说明容器内，连容器一起删。
+
+    策略（避免留下灰框占位符，也避免留下"介绍这张图"的孤零零文字）：
+    1. img 在 <figure> 内 → 删除整个 figure（含 figcaption 说明文字）
+    2. 删除 img 后，父容器（p/div/center/figcaption 等）若只剩 ≤60 字的说明
+       或空文本 → 连容器一起删
+    3. 否则仅删 img（正文段落里夹带的失败图，保留段落正文）
+    """
+    parent = tag.parent
+    tag.decompose()
+    if parent is None:
+        return
+    if parent.name == "figure":
+        parent.decompose()
+        return
+    if parent.name in ("p", "div", "center", "figcaption", "td", "span", "li"):
+        text = parent.get_text(" ", strip=True).strip()
+        if len(text) <= 60:
+            parent.decompose()
+
+
 async def _embed_images_in_html(
     html: str, page_url: str, referer: str,
     user_agent: str, extra_headers: dict, cookies: dict = None,
@@ -1706,11 +1720,7 @@ async def _embed_images_in_html(
     for item, result in zip(tasks, results):
         if isinstance(result, Exception):
             tag_ref = item["tag"]
-            orig_src = tag_ref.get("src", tag_ref.get("data-src", ""))
-            tag_ref["src"] = _FAILED_IMG_PLACEHOLDER
-            tag_ref["alt"] = f"[图片加载失败 - {orig_src[:60]}]" if orig_src else "[图片加载失败]"
-            tag_ref["data-original-src"] = orig_src
-            tag_ref["style"] = "border:1px dashed #ddd;opacity:0.7;max-width:300px;"
+            _remove_failed_img(tag_ref)
             failed_urls.append(item["src"])
             continue
 
@@ -1728,16 +1738,9 @@ async def _embed_images_in_html(
                 del tag_ref["srcset"]
             processed += 1
         else:
-            # 下载失败 → 占位图 + 保留原始链接
+            # 下载失败 → 直接删除该图（及纯图片容器/说明文字），不再用占位图
             tag_ref = item["tag"]
-            orig_src = tag_ref.get("src", tag_ref.get("data-src", ""))
-            tag_ref["src"] = _FAILED_IMG_PLACEHOLDER
-            tag_ref["alt"] = f"[图片加载失败 - {orig_src[:60]}]" if orig_src else "[图片加载失败]"
-            tag_ref["data-original-src"] = orig_src  # 保留原始链接供参考
-            tag_ref["style"] = "border:1px dashed #ddd;opacity:0.7;max-width:300px;"
-            for la in ("data-src", "data-original", "data-lazy-src", "data-url", "srcset"):
-                if la != "data-original-src" and tag_ref.has_attr(la):
-                    del tag_ref[la]
+            _remove_failed_img(tag_ref)
             failed_urls.append(item["src"])
 
     html_new = str(soup)
@@ -3087,12 +3090,13 @@ def _strip_nav_noise(html: str) -> str:
             removed += 1
 
     # 9. 纯 span/文本导航菜单（无 <a href> 链接）：
-    #    老站用 JS 渲染下拉菜单（如 zhengbang 的 h_nav/h_b_nav），菜单项是
-    #    <li><span>栏目</span></li> 没有链接，规则 7/8 的链接数与关键词判断均失效，
+    #    老站用 JS 渲染下拉菜单（如 zhengbang 的 h_nav/h_b_nav、harbin 的 nysubNav/sub-nav），
+    #    菜单项是 <li><span>栏目</span></li> 没有链接，规则 7/8 的链接数与关键词判断均失效，
     #    视觉上就是页面顶部的"首页 > 关于正邦 > 集团简介…"多级导航。
     #    安全阀：有链接不删（交给规则 7/8）；含 h1-h6 不删；li < 3 不删；文本 > 800 不删。
     _nav_span = re.compile(
-        r'(h_nav|h_b_nav|nav_wraper|nav_j|_nav|nav_|mainnav|footnav)', re.I
+        r'(h_nav|h_b_nav|nav_wraper|nav_j|_nav|nav_|mainnav|footnav|'
+        r'subnav|sub-nav|sub_nav|nysubnav)', re.I
     )
     for el in soup.find_all(["div", "ul", "ol", "nav"]):
         attrs = getattr(el, "attrs", None) or {}
@@ -3108,6 +3112,30 @@ def _strip_nav_noise(html: str) -> str:
             continue
         t = el.get_text(" ", strip=True)
         if not t or len(t) > 800:
+            continue
+        el.decompose()
+        removed += 1
+
+    # 9.1 页头 banner（纯标语+背景大图，无链接）：
+    #    企业站内页顶部常有大横幅（如 harbin 的 uny-ba：News center + 企业口号 + 一张 base64 图），
+    #    属于页面头部装饰而非正文，且图片体积巨大（单个 base64 可达数百 KB）。
+    #    安全阀：有链接不删（可能是带跳转的活动横幅）；含 h1-h6 不删；文本 > 300 不删。
+    _banner_container = re.compile(
+        r'(uny-ba|page[-_]?banner|header[-_]?banner|banner[-_]?head|'
+        r'inner[-_]?banner|nybanner|banner-box|bannerBg|bannerbg)', re.I
+    )
+    for el in soup.find_all(["div", "section", "header"]):
+        attrs = getattr(el, "attrs", None) or {}
+        cls = " ".join(attrs.get("class") or [])
+        cid = attrs.get("id") or ""
+        if not (_banner_container.search(cls) or _banner_container.search(cid)):
+            continue
+        if el.find(["h1", "h2", "h3", "h4", "h5", "h6"]):
+            continue
+        if el.find_all("a", href=True):
+            continue
+        t = el.get_text(" ", strip=True)
+        if not t or len(t) > 300:
             continue
         el.decompose()
         removed += 1
