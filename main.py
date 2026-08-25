@@ -489,6 +489,15 @@ def run_langgraph_crawler(target_url: str,
     if reset_memory:
         deleted = memory.clear_site(base_url)
         log(f"🧹 已重置站点记忆: 清除 {deleted} 条记录")
+        # ★ 同步清理上次运行的输出残留（巨型 base64 列表页/重复 _N 文件等），
+        #   避免新运行与旧文件撞名产生 _N.html 累积（配合 _save_html_file 覆盖逻辑）
+        import shutil
+        domain = parsed.netloc.replace(":", "_")
+        for cand in (os.path.join("output", domain),
+                     os.path.join("output", domain.replace("www.", ""))):
+            if os.path.isdir(cand):
+                shutil.rmtree(cand, ignore_errors=True)
+                log(f"🧹 已清理旧输出目录: {cand}")
 
     # ── 运行 LangGraph 工作流 ──
     try:
