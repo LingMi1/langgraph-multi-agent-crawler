@@ -115,6 +115,9 @@ class CrawlerState(TypedDict, total=False):
     site_name: str                     # 站点标题 → CSV brwidcl_cpmc
     output_dir: str                    # e.g. "output/www.example.com"
 
+    # ── 一级导航映射（首页提取：导航名 → URL前缀，供 nav_path 吸附与 LLM 分类） ──
+    nav_mapping: Dict[str, str]        # {"关于正邦": "/index.php/about/", ...}
+
     # ── 爬虫配置（可被 adjust_node 修改） ──
     crawler_config: Dict[str, Any]     # CrawlerConfig 序列化
 

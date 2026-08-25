@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import json
 import uuid
 import asyncio
 import hashlib
@@ -41,6 +42,7 @@ from agents.extractor import (
 )
 from agents.storage import FileSystemStorage, CSV_FIELDS
 from agents.models import SiteProfile, NavLink, PageData, CrawlResult
+from agents.llm_pipeline import get_prompt, chat_json, compress_html
 
 from schemas import agent_logger
 import config
@@ -129,10 +131,14 @@ def reset_llm():
 # ============================================================================
 
 def _url_key(url: str) -> str:
-    """生成 URL 去重键（保留查询参数，过滤追踪参数）"""
+    """生成 URL 去重键（保留查询参数，过滤追踪参数，归一化路由变体）"""
     from urllib.parse import parse_qsl, urlencode
     parsed = urlparse(url)
     path = parsed.path.rstrip("/").lower()
+    # ★ 归一化 CMS 路由变体：折叠 // 双斜杠、去掉 index.php 前缀段
+    #   （/index.php/news/1.html、/index.php//news/1.html、/news/1.html 视为同一页）
+    path = re.sub(r"/{2,}", "/", path)
+    path = re.sub(r"^/index\.php", "", path)
     # 保留查询参数，但过滤追踪/会话参数
     if parsed.query:
         TRACKING_PARAMS = {'utm_source', 'utm_medium', 'utm_campaign', 'utm_term',
@@ -144,6 +150,23 @@ def _url_key(url: str) -> str:
             query = urlencode(sorted(params))
             return f"{parsed.netloc}{path}?{query}".rstrip("/").lower()
     return f"{parsed.netloc}{path}".rstrip("/").lower()
+
+
+# 分页 URL 形态：index_2.html / list_3.shtml / page_2.asp / default_2.html
+# 注意不匹配 uuid-N.html 这类详情页（TRS CMS 详情 ID 也是「-数字」结尾，不能误判）
+_PAGINATION_URL_RE = re.compile(
+    r'(?:^|/)(?:index|list|page|default)_\d+\.(?:html?|shtml?|aspx?|jspx?|php|do)$',
+    re.I,
+)
+
+
+def _is_pagination_url(url: str) -> bool:
+    """判断 URL 是否为分页链接（只用于扩链发现详情页，不落盘）。"""
+    try:
+        path = urlparse(url).path
+    except Exception:
+        return False
+    return bool(_PAGINATION_URL_RE.search(path))
 
 
 def _extract_body_links(html: str, page_url: str, base_host: str) -> List[Tuple[str, str]]:
@@ -895,6 +918,17 @@ async def navigate_node(state: CrawlerState) -> dict:
     if not url or not profile_dict:
         return {"error": "scout 未完成，缺少 seed_url 或 site_profile"}
 
+    # ★ 每次爬取开始重置 URL→nav_path 注册表（防跨站/跨轮次污染）
+    _reset_url_nav_registry()
+
+    # ★ 登记首页 URL 前缀（/index.php 等）：它是全站内容页的 catch-all 父路径，
+    #   禁止在其上登记一级导航条目（防止「正邦产业→首页」污染所有下级页面）。
+    _hp_prefix = _url_path_prefix(url)
+    if _hp_prefix and _hp_prefix != "/":
+        _HOMEPAGE_PREFIXES.add(_hp_prefix)
+    elif urlparse(url).path in ("", "/", "/index.html", "/index.php"):
+        _HOMEPAGE_PREFIXES.add("/")
+
     profile = SiteProfile(**profile_dict)
     agent_logger.info(f"[Graph::navigate] 抓取首页: {url}")
 
@@ -914,6 +948,52 @@ async def navigate_node(state: CrawlerState) -> dict:
     nav = _get_nav()
     hp_links = await nav.extract_links(homepage.html, profile, current_depth=0)
     agent_logger.info(f"[Graph::navigate] 导航链接: {len(hp_links)} 个")
+
+    # ★ 提取一级导航映射（名称 → URL前缀）→ 登记 URL→nav_path 注册表。
+    #   这是层级修复的地基：首页导航锚文本是站点作者定义的真实栏目名，
+    #   后续列表页/详情页的 nav_path 都以它为一级。
+    nav_mapping: Dict[str, str] = {}
+    try:
+        soup_hp = BeautifulSoup(homepage.html, "html.parser")
+        nav_mapping = _extract_nav_mapping(soup_hp, url)
+        # ★ JS 菜单硬提取：静态 HTML 的导航是 span 无链接（zhengbang h_nav 等 JS 菜单），
+        #   Playwright 渲染后菜单变真实 <a href> → 重新提取一级导航映射。
+        #   否则一级映射为空 → 注册表地基为空 → 层级回退到「纯 BFS 传播」旧问题。
+        if _homepage_nav_js_suspected(soup_hp, nav_mapping):
+            agent_logger.info(
+                f"[Graph::navigate] 静态导航疑似 JS 渲染(静态映射{len(nav_mapping)}条)，"
+                f"Playwright 渲染后硬提取一级导航"
+            )
+            try:
+                js_page = await fetcher._fetch_playwright(url)
+                if js_page.html and len(js_page.html) > 200:
+                    js_mapping = _extract_nav_mapping(
+                        BeautifulSoup(js_page.html, "html.parser"), url
+                    )
+                    if len(js_mapping) > len(nav_mapping):
+                        agent_logger.info(
+                            f"[Graph::navigate] JS 渲染提取一级导航 "
+                            f"{len(nav_mapping)} → {len(js_mapping)} 条"
+                        )
+                        nav_mapping = js_mapping
+                    else:
+                        agent_logger.info(
+                            f"[Graph::navigate] JS 渲染未获得更多导航"
+                            f"({len(js_mapping)}条)，保留静态映射"
+                        )
+            except Exception as _js_e:
+                agent_logger.warning(f"[Graph::navigate] JS 渲染导航提取失败: {_js_e}")
+        reg_cnt = 0
+        for _name, _prefix in nav_mapping.items():
+            _register_url_nav(_prefix, [_name])
+            reg_cnt += 1
+        if reg_cnt:
+            agent_logger.info(
+                f"[Graph::navigate] 一级导航映射登记 {reg_cnt} 条 → URL注册表 "
+                f"(样例: {list(nav_mapping.items())[:3]})"
+            )
+    except Exception as _e:
+        agent_logger.warning(f"[Graph::navigate] 一级导航映射提取失败: {_e}")
 
     # 构建初始队列
     base_host = urlparse(url).netloc.lower()
@@ -942,6 +1022,8 @@ async def navigate_node(state: CrawlerState) -> dict:
         "seen_url_keys": seen_keys,
         "current_html": homepage.html,
         "current_url": url,
+        # ★ 一级导航映射传给后续节点：供 fetch_extract 的 nav_path 吸附与 LLM 分类
+        "nav_mapping": nav_mapping,
     }
 
 
@@ -973,6 +1055,9 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
     seen_hashes: List[str] = list(state.get("seen_hashes", []))
     stats: Dict[str, int] = dict(state.get("stats", {}))
     extraction_rules = state.get("extraction_rules", {})  # LLM 生成的规则
+    # ★ 一级导航映射（navigate_node 提取）：供 nav_path 标题吸附与 LLM 分类
+    nav_mapping = state.get("nav_mapping", {}) or {}
+    nav_names: List[str] = [str(n) for n in nav_mapping.keys() if str(n).strip()]
     # ★ 已内嵌图片的页面 URL（media 阶段处理过），其 HTML 不应再被 re-enqueue 覆盖
     media_processed_keys: set = {_url_key(u) for u in (state.get("media_processed_urls", []) or []) if u}
 
@@ -988,6 +1073,8 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
     url = item["url"]
     depth = item.get("depth", 1)
     nav_path = item.get("nav_path", [])
+    # ★ 分页页（index_2.html 等）只用于扩链发现详情页，不落盘
+    is_pagination_page = bool(item.get("_pagination"))
 
     agent_logger.info(f"[Graph::fetch_extract] depth={depth} | {url[:80]}")
 
@@ -1072,6 +1159,71 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
     rescued_html = rescued  # 保存抢救后的原始 HTML（后续图片合并用）
     page.html = rescued
 
+    # ★★★ nav_path 增强（提前到列表页判断之前，供子链接入队/CSV/落盘共用） ★★★
+    # 优先级链：面包屑 ≥2 级（页面显式声明）> URL注册表（最长前缀，URL反映真实层级）
+    #          > BFS传递（原值）> 单级面包屑兜底（非页面标题）
+    # 背景：详情页无面包屑（正邦实测 0 命中），BFS 传递只能到一级栏目，
+    #       必须靠 URL→nav_path 注册表（navigate 登记一级 + 列表页登记更深）补全层级。
+    _resolved_nav = None
+    _resolve_reason = ""
+    if rescued_html:
+        _bc_nav = _extract_breadcrumb_nav(rescued_html)
+        if _bc_nav and len(_bc_nav) >= 2:
+            # ① 面包屑 ≥2 级：页面自带真实层级，最高优先
+            _merged = list(_bc_nav)
+            for _p in nav_path:
+                if _p and _p != "网站地图" and _p not in _merged:
+                    _merged.append(_p)
+            if _merged != nav_path:
+                _resolved_nav, _resolve_reason = _merged, "breadcrumb>=2"
+        else:
+            _reg_nav = _lookup_url_nav(url)
+            if _reg_nav and (not nav_path or _reg_nav[0] != nav_path[0] or len(_reg_nav) >= len(nav_path)):
+                # ② URL注册表：BFS 无值 / 顶级冲突（吸附修复） / 注册表更深时采用。
+                #   ★ 修复点：原条件 `len(_reg_nav) >= 2 or not nav_path` 会忽略单级注册表命中，
+                #     导致"关于正邦"页里发现的顶级栏目"发展历程"继承 [关于正邦] 链式塌缩。
+                #     现在只要顶级冲突（reg[0] != nav_path[0]）就吸附回注册表真实栏目。
+                _merged = list(_reg_nav)
+                if _reg_nav[0] == nav_path[0]:
+                    # 顶级一致 → 追加 BFS 传递的更浅层级补全（不冲突才补）
+                    for _p in nav_path:
+                        if _p and _p != "网站地图" and _p not in _merged:
+                            _merged.append(_p)
+                if _merged != nav_path:
+                    _resolved_nav, _resolve_reason = _merged, "registry"
+            elif _bc_nav and not _is_likely_page_title(_bc_nav[0]):
+                # ④ 单级面包屑兜底（非页面标题）
+                _merged = list(_bc_nav)
+                for _p in nav_path:
+                    if _p and _p != "网站地图" and _p not in _merged:
+                        _merged.append(_p)
+                if _merged != nav_path:
+                    _resolved_nav, _resolve_reason = _merged, "breadcrumb-single"
+    if _resolved_nav:
+        _bk = " > ".join(_resolved_nav)
+        if _bk not in _BC_LOG_SEEN:
+            _BC_LOG_SEEN.add(_bk)
+            agent_logger.info(
+                f"[Graph::fetch_extract] nav_path 增强({_resolve_reason}): "
+                f"{nav_path} → {_resolved_nav} | {url[:60]}"
+            )
+        nav_path = _resolved_nav
+        page.nav_path = list(_resolved_nav)
+
+    # ★ 层级吸附归一化（确定性修复链式塌缩）：
+    #   1) 注册表吸附：URL 已登记真实栏目且顶级冲突 → 吸附回真实栏目
+    #   2) 标题吸附：页面标题命中一级导航名 → 该页即顶级栏目页（防顶级栏目被埋深）
+    #   3) 连续重复去重 + 4 级封顶
+    _snapped = _snap_nav_to_registry(url, nav_path)
+    if _snapped != nav_path:
+        nav_path = _snapped
+        page.nav_path = list(_snapped)
+    if nav_names:
+        _title_nav = _title_snap_nav(page.title or "", set(nav_names))
+        if _title_nav and (list(_title_nav) != nav_path or len(nav_path) > 1):
+            nav_path = _title_nav
+            page.nav_path = list(_title_nav)
+
     # ── 列表页判断 ──
     base_host = urlparse(seed_url).netloc.lower()
 
@@ -1090,6 +1242,25 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
         return {"queue": queue, "stats": stats, "seen_url_keys": seen_keys}
 
     if is_list and depth < 4:
+        # ★ 列表页层级登记：列表页自身是 URL 层级的一环。
+        #   1) 用注册表查父级层级（一级来自首页导航映射，更深来自已登记的列表页）
+        #   2) 把自己的中文栏目名（标题清洗）追加到父级之后 → 形成完整层级
+        #   3) 以「自身 URL 前缀 → 完整层级」登记进注册表，供后续详情页/更深列表页继承
+        #   （先于子链接入队执行，子链接继承补全后的 nav_path）
+        _reg_base = _lookup_url_nav(url)
+        _base_nav = _reg_base if len(_reg_base) >= len(nav_path) else nav_path
+        _list_name = _clean_list_title(page.title or "")
+        if _list_name and _looks_like_category_title(_list_name) and _list_name not in _base_nav:
+            nav_path = list(_base_nav) + [_list_name]
+            agent_logger.info(
+                f"[Graph::fetch_extract] 列表页标题追加 nav_path: "
+                f"[{_list_name}] ← {url[:60]}"
+            )
+        else:
+            nav_path = list(_base_nav)
+        # ★ 追加后归一化：4 级封顶 + 连续重复去重，防链式塌缩污染注册表
+        nav_path = _snap_nav_to_registry(url, nav_path)
+        _register_url_nav(url, nav_path)
         # ★ 正文页误判保护：如果页面有大量正文内容（>5000字），说明是详情页（非真列表页），不提取子链接
         #    避免侧边栏推荐/相关链接等高密度区导致 nav_path 传播污染
         if len(text_for_check) > 5000:
@@ -1121,24 +1292,27 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
                     # ★ 过滤超长链接文本（>15 字 → 文章标题，非导航标签），不参与 nav_path
                     if clean_text and len(clean_text) > 15:
                         clean_text = ""
+                    # ★ 分页链接（index_2.html 等）只用于扩链发现详情页，打标记供落盘阶段跳过
                     queue.append({
                         "url": abs_url,
                         "depth": new_depth,
                         "nav_path": nav_path,
+                        "_pagination": _is_pagination_url(abs_url),
                     })
                     added += 1
-                # ★ BFS 重入队：URL 已发现但当前 nav_path 更好时，允许重新入队
+                # ★ BFS 重入队：URL 已发现但当前 nav_path 更深时，允许重新入队（仅扩链，不再重存文件）
                 elif _should_re_enqueue(key, nav_path):
                     if key in media_processed_keys:
                         # ★ 已内嵌 Base64 的页面禁止重入队覆盖（否则图片会被远程 URL 覆盖回去，白内嵌）
                         continue
-                    # 已保存过的清除URL去重记录，让它重新保存到正确目录
-                    _saved_urls.discard(key)
+                    # ★ 不再清 _saved_urls：重入队只用于重新提取子链接，不重新保存文件
+                    #   （URL/MD5 双重去重保证同一页面只落盘一次，杜绝 _N.html 爆炸）
                     queue.append({
                         "url": abs_url,
                         "depth": new_depth,
                         "nav_path": nav_path,
                         "_re_enqueued": True,
+                        "_pagination": _is_pagination_url(abs_url),
                     })
                     re_enqueued += 1
             if added or pagination_links or re_enqueued:
@@ -1152,6 +1326,18 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
                     f"[Graph::fetch_extract] {' '.join(log_parts)}"
                 )
         # ★ 不 return — 继续往下保存列表页自身内容（防止"企业环境"等含内容的栏目页丢失）
+
+    # ── 详情页 LLM 导航分类 ──
+    # 规则解析（面包屑/注册表/吸附）后层级仍无法确定子栏目时，用 LLM 精判归属：
+    #   - 详情页（非列表页）才调 LLM，栏目页不烧 token
+    #   - 结果按 URL 前缀回写注册表，同前缀兄弟页直接复用
+    if not is_list and nav_names and (len(nav_path) < 2 or nav_path[0] not in set(nav_names)):
+        _llm_nav = await _classify_nav_path_llm(
+            url, page.title or "", nav_path, nav_names
+        )
+        if _llm_nav:
+            nav_path = _llm_nav
+            page.nav_path = list(_llm_nav)
 
     # ── 详情页: 清洗 ──
     # 优先使用 LLM 生成的规则（如果存在），否则使用默认 trafilatura/BS4 管道
@@ -1242,7 +1428,16 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
             return {"queue": queue, "stats": stats, "seen_url_keys": seen_keys}
 
     # ── 构建模板 HTML（结构化 + 固定排版）──
-    structured_body = _build_structured_content(rescued_html, url)
+    # ★ BFS+LLM 整合：详情页用两段式 LLM 定位正文容器（URL 形态模板缓存，同站同模板只调一次 LLM），
+    #   列表页/栏目页保持代码启发式（BS4），速度不受影响
+    llm_selector = ""
+    if not is_list:
+        llm_selector = await _llm_locate_content_selector(
+            rescued_html, url, seed_url, site_name
+        )
+    structured_body = _build_structured_content(
+        rescued_html, url, content_selector=llm_selector
+    )
 
     # ── 内容有效性检查：正文过短 / 二维码聚合页（官方微信/微博/微群等）→ 丢弃 ──
     # 二维码聚合页特征：正文是"官方微信/官方微博/微群/易企秀"等二维码图集+链接列表，
@@ -1280,61 +1475,6 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
     if content_hash:
         seen_hashes.append(content_hash)
 
-    # ── nav_path 补全（优先级：BFS传递 > 面包屑 ≥2级 > URL路径推断 > 面包屑单级） ──
-    # ★ 面包屑日志去重：同一 nav_path 组合只打印首次（降噪，功能不变）
-    if rescued_html and (not nav_path or nav_path == ["网站地图"]):
-        breadcrumb_nav = _extract_breadcrumb_nav(rescued_html)
-        if breadcrumb_nav and len(breadcrumb_nav) >= 2:
-            # 面包屑提供 ≥2 级层级 → 直接采用
-            merged = list(breadcrumb_nav)
-            for p in nav_path:
-                if p and p != "网站地图" and p not in merged:
-                    merged.append(p)
-            if merged and merged != nav_path:
-                _bk = " ≥2 ".join(merged)
-                if _bk not in _BC_LOG_SEEN:
-                    _BC_LOG_SEEN.add(_bk)
-                    agent_logger.info(
-                        f"[Graph::fetch_extract] 面包屑推断 nav_path(≥2级): "
-                        f"{nav_path} → {merged} | {url[:60]}"
-                    )
-                nav_path = merged
-                cleaned.nav_path = list(merged)
-        elif breadcrumb_nav and not _is_likely_page_title(breadcrumb_nav[0]):
-                # 面包屑单级但非页面标题 → 可作为 nav_path 兜底
-                merged = list(breadcrumb_nav)
-                for p in nav_path:
-                    if p and p != "网站地图" and p not in merged:
-                        merged.append(p)
-                if merged and merged != nav_path:
-                    _bk = " 单 ".join(merged)
-                    if _bk not in _BC_LOG_SEEN:
-                        _BC_LOG_SEEN.add(_bk)
-                        agent_logger.info(
-                            f"[Graph::fetch_extract] 面包屑兜底 nav_path(单级): "
-                            f"{nav_path} → {merged} | {url[:60]}"
-                        )
-                    nav_path = merged
-                    cleaned.nav_path = list(merged)
-    elif rescued_html:
-        # BFS nav_path 已有有效值 → 仅当面包屑明显更深时才合并
-        breadcrumb_nav = _extract_breadcrumb_nav(rescued_html)
-        if breadcrumb_nav and len(breadcrumb_nav) > len(nav_path):
-            merged = list(breadcrumb_nav)
-            for p in nav_path:
-                if p and p != "网站地图" and p not in merged:
-                    merged.append(p)
-            if merged and merged != nav_path:
-                _bk = " 增强 ".join(merged)
-                if _bk not in _BC_LOG_SEEN:
-                    _BC_LOG_SEEN.add(_bk)
-                    agent_logger.info(
-                        f"[Graph::fetch_extract] 面包屑增强 nav_path: "
-                        f"{nav_path} → {merged} | {url[:60]}"
-                )
-                nav_path = merged
-                cleaned.nav_path = list(merged)
-
     template_html = _build_template_html(
         structured_body=structured_body,
         title=cleaned.title,
@@ -1362,14 +1502,59 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
     csv_row = _build_csv_row(cleaned, site_name, nav_path)
 
     # ── 保存 HTML 文件到磁盘 ──
-    rel_path = await _save_html_file(cleaned, output_dir)
+    # ★ 列表页/分页页无实质正文不落盘：只写 CSV 索引。
+    #   正邦等站点列表页整页含 base64 缩略图可达数 MB，且分页页会反复生成同标题 _N 文件；
+    #   有实质正文的栏目页（如"企业环境"介绍）仍正常落盘。
+    # ★ 二维码聚合页/纯图墙页检测：正文极短 + 多张图片（官方微信/微博/微群/易企秀等
+    #   二维码图集页，如 zhengbang 的 /contact/zbwq.html）。这类页无实质文章内容，
+    #   直接丢弃（不落盘、不进 CSV）。注意基于落盘时的 cleaned.html 判断，
+    #   避免 rescued/模板构建路径把导航文本混进来导致误判。
+    # ★ 必须剔除 <style>/<script>：模板 HTML 头部 CSS 会让 text 虚高数百字，判定失效
+    qr_html = re.sub(r'<style[\s\S]*?</style>', '', cleaned.html or "", flags=re.I)
+    qr_html = re.sub(r'<script[\s\S]*?</script>', '', qr_html, flags=re.I)
+    qr_text = re.sub(r'<[^>]+>', '', qr_html)
+    qr_text = re.sub(r'\s+', '', qr_text)
+    qr_imgs = len(re.findall(r'<img\b', cleaned.html or "", re.I))
+    if len(qr_text) < 150 and qr_imgs >= 3:
+        stats["skipped_qr"] = stats.get("skipped_qr", 0) + 1
+        agent_logger.info(
+            f"[Graph::fetch_extract] 二维码聚合页/纯图页(text={len(qr_text)}字, imgs={qr_imgs})，"
+            f"直接丢弃 | {url[:60]}"
+        )
+        return {
+            "queue": queue, "stats": stats, "seen_url_keys": seen_keys,
+            "seen_hashes": seen_hashes,
+        }
+    if is_list and (is_pagination_page or not _has_substantial_content(_check_text, cleaned.html)):
+        rel_path = ""
+        stats["skipped_save"] = stats.get("skipped_save", 0) + 1
+        agent_logger.info(
+            f"[Graph::fetch_extract] 列表页/分页页无实质正文，不落盘 | "
+            f"text={len(_check_text)} | {url[:60]}"
+        )
+    elif not is_list and not _detail_content_ok(qr_text, qr_html):
+        # ★ detail 页落盘前质量校验：正文 <80 字（空壳页，选择器命中 meta/标题区），
+        #   或正文区链接密度过高（坏选择器命中了列表容器，正文全是链接标题）→ 不落盘
+        rel_path = ""
+        stats["skipped_save"] = stats.get("skipped_save", 0) + 1
+        agent_logger.info(
+            f"[Graph::fetch_extract] detail 页正文异常(text={len(qr_text)}字, "
+            f"links={len(re.findall(r'<a\\b', qr_html, re.I))})，不落盘 | {url[:60]}"
+        )
+    else:
+        rel_path = await _save_html_file(cleaned, output_dir)
     csv_row["file_path"] = rel_path
 
-    stats["saved"] = stats.get("saved", 0) + 1
-    agent_logger.info(
-        f"[Graph::fetch_extract] 已保存 | title={cleaned.title[:30]} | "
-        f"imgs={cleaned.images_count} | hash={content_hash[:8] if content_hash else 'N/A'}"
-    )
+    if rel_path:
+        stats["saved"] = stats.get("saved", 0) + 1
+        agent_logger.info(
+            f"[Graph::fetch_extract] 已保存 | title={cleaned.title[:30]} | "
+            f"imgs={cleaned.images_count} | hash={content_hash[:8] if content_hash else 'N/A'}"
+        )
+    else:
+        agent_logger.info(
+            f"[Graph::fetch_extract] 仅入CSV(未落盘) | title={cleaned.title[:30]} | {url[:60]}"
+        )
 
     return {
         "queue": queue,
@@ -1488,21 +1673,26 @@ _IMG_SEMAPHORE = asyncio.Semaphore(30)
 # 可被 Base64 替换的图片标签
 _IMG_TAGS = {"img", "graphic", "image"}
 
-# 图标/装饰性图片的特征（不转 Base64）
+# 图标/装饰性图片的特征（不转 Base64，命中即删）
 _ICON_PATTERNS = [
-    "icon", "logo", "avatar", "banner-ad", "pixel", "tracking",
-    "spacer", "blank", "dot", "bullet", "arrow",
-    "favicon", "btn", "button", "qr-code", "qrcode",
-    "erweima", "二维码", "wechat", "badge", "cert",
-    # ★ 装饰小图（harbin 列表图标类）：直接按文件名后缀拦截，避免误伤含 ico 的正文词
+    # ★ 二维码/扫码类：全局强制（正文区也不留，清洗效果优先）
+    "qr-code", "qrcode", "qr_code", "erweima", "二维码", "saoyisao",
+    "contentwx", "wx_code", "wechat", "weixin",
+    # ★ 明确装饰词（保持原边界，避免误伤正文图）
+    "logo", "avatar", "banner-ad", "pixel", "tracking",
+    "spacer", "blank", "bullet", "arrow",
+    "favicon", "btn", "button", "badge", "cert",
+    # ★ 装饰小图（harbin 列表图标类）：边界化 icon，避免误删正文数据图标
+    #   icon1.jpg（正文数据图标）不命中；icon_bar.png / _icon / icons/ 命中
+    "icon_", "_icon", "/icon/", "icons/",
     "ico.jpg", "ico.jpeg", "ico.png", "ico.gif", "ico.bmp",
     "ico_", "_ico", "/ico/", "/icons/",
 ]
 
 # ★ 图片 URL 强制过滤关键词（绝对不要的图片）
 _IMG_BLOCK_URL_KW = {
-    "logo", "icon", "qrcode", "erweima", "二维码", "wechat",
-    "avatar", "favicon",
+    "logo", "icon", "qrcode", "erweima", "二维码", "wechat", "weixin",
+    "avatar", "favicon", "contentwx", "wx_code", "qr_code", "saoyisao",
 }
 
 # ★ 图片 alt 文本可疑模式（纯短数字/英文 = 低信息量）
@@ -1528,15 +1718,16 @@ _ANTILEECH_COOKIES: Dict[str, Dict[str, str]] = {}
 
 async def media_processor_node(state: CrawlerState) -> dict:
     """
-    媒体处理节点 — 将已爬取页面的图片下载并转为 Base64 内嵌到 HTML 中。
+    媒体处理节点 — 图片外链化（不再下载转 Base64）。
 
     处理流程:
       1. 遍历 crawled_results 中所有已保存的页面
       2. 解析每个页面的 <img>/<graphic> 标签
-      3. 过滤小图标/装饰图 + 下载图片二进制
-      4. 检测 MIME 类型，转为 data:image/xxx;base64,...
-      5. LLM 兜底：下载失败的图片交给 LLM 分析
-      6. 将已处理页面的 HTML 重新写入文件（覆盖之前保存的版本）
+      3. 过滤装饰图/二维码/图标（命中即删）+ 保留正文图原 URL（外链）
+      4. 将已处理页面的 HTML 重新写入文件（覆盖之前保存的版本）
+
+    产物不含任何 base64 内嵌数据，文件体积显著缩小；正文图以原 URL
+    外链保留（referrerpolicy=no-referrer 防防盗链）。
     """
     results: List[Dict] = list(state.get("crawled_results", []))
     output_dir = state.get("output_dir", "")
@@ -1580,6 +1771,10 @@ async def media_processor_node(state: CrawlerState) -> dict:
             return
         html_src = row.get("html", "")
         if not html_src:
+            return
+        # ★ 未落盘页面（列表页/分页页，file_path 为空）不参与图片 Base64 内嵌：
+        #   它们只有索引价值，跳过可避免下载大量缩略图浪费时间/流量。
+        if not row.get("file_path"):
             return
 
         url = row.get("url", "") or ""
@@ -1677,82 +1872,49 @@ async def _embed_images_in_html(
     global_seen_hashes: Optional[Dict[str, int]] = None,
 ) -> Tuple[str, int, int]:
     """
-    解析 HTML 中所有图片标签，下载后转为 Base64 内嵌。
+    图片外链模式：不再下载转 Base64。
 
-    Args:
-        cookies: 原始请求的 session cookie，用于防盗链绕过
-        global_seen_hashes: 全局图片 MD5 → 次数，用于跨页面去重
+    - 通过过滤的图片：保留原 URL 作为 <img src>（graphic/image 标签统一转
+      <img>），清理懒加载属性，加 referrerpolicy="no-referrer" 防防盗链；
+    - 过滤命中的图片（二维码/装饰图/图标）或无 src 的占位图：直接删除
+      （含纯图片容器/说明文字），不留任何占位符。
+
+    参数保留兼容调用方（referer/user_agent/cookies/global_seen_hashes
+    在纯外链模式下不再使用）。
 
     Returns:
-        (new_html, processed_count, failed_count)
+        (new_html, kept_count, removed_count)
     """
     try:
         soup = BeautifulSoup(html, "html.parser")
     except Exception:
         return html, 0, 0
 
-    # 收集所有需要处理的图片标签
-    tasks: List[dict] = []
-    for tag in soup.find_all(list(_IMG_TAGS)):
+    kept = 0
+    removed = 0
+    for tag in list(soup.find_all(list(_IMG_TAGS))):
         src = _extract_src(tag)
         if not src:
+            # 无 src 的占位图 → 删除
+            _remove_failed_img(tag)
+            removed += 1
             continue
         if not _should_embed(src, tag):
+            # 装饰图/二维码/图标 → 删除（及纯图片容器/说明文字），不留占位
+            _remove_failed_img(tag)
+            removed += 1
             continue
-        tasks.append({"tag": tag, "src": src, "page_url": page_url})
+        # 保留外链：graphic/image → img
+        if tag.name != "img":
+            tag.name = "img"
+        tag["src"] = src
+        tag["referrerpolicy"] = "no-referrer"
+        for attr in ("data-src", "data-original", "data-lazy-src", "data-url", "srcset"):
+            if tag.has_attr(attr):
+                del tag[attr]
+        kept += 1
 
-    if not tasks:
-        return html, 0, 0
-
-    # 并发下载
-    async def download_one(item: dict) -> Tuple[Optional[str], str]:
-        async with _IMG_SEMAPHORE:
-            return await _download_and_encode(
-                item["src"], item["page_url"], referer, user_agent, extra_headers, cookies or {},
-                global_seen_hashes,
-            )
-
-    results = await asyncio.gather(*[download_one(t) for t in tasks], return_exceptions=True)
-
-    processed = 0
-    failed_urls: List[str] = []
-
-    for item, result in zip(tasks, results):
-        if isinstance(result, Exception):
-            tag_ref = item["tag"]
-            _remove_failed_img(tag_ref)
-            failed_urls.append(item["src"])
-            continue
-
-        b64_data, mime = result
-        if b64_data:
-            tag_ref = item["tag"]
-            for attr in ("src", "data-src", "data-original"):
-                if tag_ref.get(attr):
-                    tag_ref[attr] = f"data:{mime};base64,{b64_data}"
-                    for la in ("data-src", "data-original", "data-lazy-src", "data-url"):
-                        if la != attr and tag_ref.has_attr(la):
-                            del tag_ref[la]
-                    break
-            if tag_ref.has_attr("srcset"):
-                del tag_ref["srcset"]
-            processed += 1
-        else:
-            # 下载失败 → 直接删除该图（及纯图片容器/说明文字），不再用占位图
-            tag_ref = item["tag"]
-            _remove_failed_img(tag_ref)
-            failed_urls.append(item["src"])
-
-    html_new = str(soup)
-
-    # ── LLM 兜底已移除：失败图片统一用占位图（每页失败图再调 LLM 分析既慢又烧 token，
-    #    且对 meta refresh 反爬类失败几乎无收益） ──
-    # if failed_urls:
-    #     llm_fixes = await _llm_analyze_failed_images(html, failed_urls, page_url)
-    #     for orig_url, new_src in llm_fixes.items():
-    #         html_new = html_new.replace(orig_url, new_src)
-
-    return html_new, processed, len(failed_urls)
+    return str(soup), kept, removed
 
 
 def _extract_src(tag) -> str:
@@ -2317,7 +2479,8 @@ async def storage_node(state: CrawlerState) -> dict:
     for row in results:
         if not row or not isinstance(row, dict):
             continue
-        _dedup[row.get("url") or row.get("title") or str(id(row))] = row
+        _dedup[_url_key(row.get("url")) if row.get("url") else
+               (row.get("title") or str(id(row)))] = row
     results = list(_dedup.values())
 
     if not results:
@@ -2341,6 +2504,13 @@ async def storage_node(state: CrawlerState) -> dict:
 
     csv_path = os.path.join(output_dir, "crawl_results.csv")
     agent_logger.info(f"[Graph::storage] 写入 CSV | path={csv_path} | rows={len(results)}")
+
+    # ★ CSV 瘦身：html 字段不存全量 HTML（含 base64 图，单行可达数 MB），
+    #   改存正文纯文本 + 图片 URL 列表，CSV 体积从数百 MB 降到 KB 级。
+    #   HTML 文件本体不受影响（fetch/media 阶段已落盘）。
+    for row in results:
+        if row and isinstance(row, dict) and row.get("html"):
+            row["html"] = _slim_html_for_csv(row.get("html", ""))
 
     await _write_csv(csv_path, results)
 
@@ -2571,68 +2741,33 @@ def _is_likely_page_title(text: str) -> bool:
     return False
 
 
+# ★ URL → 已记录的最优 nav_path（重入队判定：仅更深层级才允许重入，防止来回震荡产生 _N 爆炸）
+_re_enqueued_nav_paths: Dict[str, str] = {}
+
+
 def _should_re_enqueue(url_key: str, new_nav_path: list) -> bool:
     """
-    BFS 重入队条件：当前 nav_path 比已发现的更优时，允许重新入队。
-    
-    条件:
+    BFS 重入队条件（已收紧）：仅当新 nav_path 是"实质目录变化（层级更深）"才允许重新入队。
+
+    条件（全部满足才重入队）:
       1. new_nav_path 至少 2 级（是真实类别层级，非单元素标题）
       2. new_nav_path 第一级不是页面标题（非 "2019-03-28 标题" 格式）
+      3. 新 nav_path 层级比之前记录的更深（防止同一目录反复重入队）
     """
     if not new_nav_path or len(new_nav_path) < 2:
         return False
     if _is_likely_page_title(new_nav_path[0]):
         return False
+    new_key = "/".join(str(p).strip() for p in new_nav_path if str(p).strip())
+    if not new_key:
+        return False
+    prev = _re_enqueued_nav_paths.get(url_key, "")
+    prev_depth = len(prev.split("/")) if prev else 0
+    if prev and len(new_key.split("/")) <= prev_depth:
+        # 已重入队过且新 nav_path 不更深 → 不重入，避免同目录反复重入队导致 _N 文件爆炸
+        return False
+    _re_enqueued_nav_paths[url_key] = new_key
     return True
-
-
-def _extract_url_path_nav(url: str) -> list:
-    """
-    从 URL 路径中推断导航层级（兜底方案，当 BFS nav_path 和面包屑都失败时使用）。
-
-    例如:
-      /jggs/sy88/news/company/2024/article.html → ["news", "company"]
-      /a/b/c/detail.html                      → ["a", "b", "c"]
-
-    过滤规则:
-      - 去掉纯数字、日期格式、技术前缀（jggs/sy88/index/php等）
-      - 去掉首页兜底词（网站地图等）
-      - 最多保留 4 级
-    """
-    import re as _re3
-    if not url:
-        return []
-    parsed = urlparse(url)
-    path = parsed.path.strip("/")
-    if not path:
-        return []
-
-    parts = path.split("/")
-    # 去掉文件名（含扩展名的最后一段）
-    if parts and "." in parts[-1]:
-        parts.pop()
-
-    cleaned = []
-    skip_patterns = [
-        r'^jggs$', r'^sy\d+$', r'^index$', r'^php$', r'^html$',
-        r'^default$', r'^main$', r'^home$', r'^page$',
-        r'^\d{4}$', r'^\d{4}-\d{2}$', r'^\d{4}-\d{2}-\d{2}$',
-        r'^\d+$',
-    ]
-    for p in parts:
-        p = p.strip().lower()
-        if not p:
-            continue
-        if any(_re3.match(sp, p) for sp in skip_patterns):
-            continue
-        # 恢复原始大小写（从原始 path 中取）
-        idx = parts.index(p) if p in parts else -1
-        # 简单去重（相对于已有 segments）
-        if p not in cleaned:
-            cleaned.append(p)
-
-    # 最多保留 4 级
-    return cleaned[:4]
 
 
 # ★ 面包屑 nav_path 日志去重缓存：同一组合只打印首次（752 条 → 每组合 1 条）
@@ -2704,7 +2839,516 @@ def _extract_breadcrumb_nav(rescued_html: str) -> list:
     return []
 
 
-def _build_structured_content(rescued_html: str, page_url: str = "") -> str:
+# ============================================================================
+# URL 前缀 → nav_path 注册表（修复产物层级塌缩的核心机制）
+#
+# 背景：正邦等 TRS CMS 站点的详情页/列表页都没有面包屑（实测 0 命中），
+# BFS 传递的 nav_path 只能到一级栏目，导致：
+#   - CSV ywlx1-4 只填 1 级（ywlx2-4 全空）
+#   - 落盘目录平铺（22 个一级栏目文件夹内全是文件，二级/三级栏目丢失）
+#   - 列表页标题被误用 → "集团简介/发展历程"等孤儿一级分类
+#
+# 方案：BFS 过程中动态登记「URL 路径前缀 → nav_path 中文层级」，
+#   一级来自首页导航锚文本（_extract_nav_mapping），
+#   二级及以上来自列表页自身标题清洗（_clean_list_title）+ 面包屑，
+#   详情页用自身 URL 做最长前缀匹配（_lookup_url_nav）拿完整层级。
+# ============================================================================
+
+_URL_NAV_REGISTRY: Dict[str, List[str]] = {}
+
+# ★ 站点首页 URL 前缀集合（如 /index.php、/）：这些前缀是全站内容的 catch-all 父路径，
+#   任何内容页的注册表前缀都可能走到它。若允许在它上面登记一级导航条目，
+#   （如首页导航把「正邦产业」指向 /index.php 首页 → 注册 /index.php → [正邦产业]），
+#   会污染全站：/index.php/news.html、/index.php/xwjj/... 全部吸附到错误一级。
+#   对策：navigate_node 登记首页前缀后，_register_url_nav 对命中前缀的注册直接拒绝。
+_HOMEPAGE_PREFIXES: Set[str] = set()
+
+
+def _reset_url_nav_registry() -> None:
+    """每次爬取开始时清空注册表（模块级全局，防跨站污染）"""
+    _URL_NAV_REGISTRY.clear()
+    _LLM_NAV_CACHE.clear()
+    _HOMEPAGE_PREFIXES.clear()
+
+
+def _url_path_prefix(url: str) -> str:
+    """提取 URL 去掉文件名后的路径前缀（注册表 key 的归一化形式）。
+
+    /index.php/xwjj/gsyw/xxx.html  → /index.php/xwjj/gsyw
+    /index.php/xwjj/gsyw/index.html → /index.php/xwjj/gsyw
+    /                              → /
+    """
+    if not url:
+        return "/"
+    parsed = urlparse(url)
+    path = parsed.path.rstrip("/")
+    if not path:
+        return "/"
+    # ★ 归一化连续斜杠：/index.php//news.html → /index.php/news.html
+    #   TRS CMS 等站点链接常带 //。若不归一化，rsplit 会把前缀塌缩成父级
+    #   （如 /index.php//news.html → /index.php），导致注册表出现全站 catch-all 污染。
+    path = re.sub(r"/{2,}", "/", path)
+    last = path.rsplit("/", 1)[-1]
+    if "." in last:
+        path = path.rsplit("/", 1)[0]
+    return path.rstrip("/") or "/"
+
+
+def _register_url_nav(url: str, nav_path: List[str]) -> None:
+    """把「URL 路径前缀 → nav_path」登记进注册表。
+
+    仅登记有效的多级/单级中文层级（空或只有通用词的跳过）。
+    """
+    if not nav_path:
+        return
+    prefix = _url_path_prefix(url)
+    if prefix == "/" or prefix in _HOMEPAGE_PREFIXES:
+        # ★ 首页/catch-all 前缀保护：拒绝在任何内容页都共享的父路径上登记层级，
+        #   否则一个一级导航条目（如「正邦产业」）会污染全站下级页面的吸附结果。
+        return
+    clean = [str(p).strip() for p in nav_path if str(p).strip()]
+    if not clean:
+        return
+    prev = _URL_NAV_REGISTRY.get(prefix)
+    if not prev or len(clean) >= len(prev):
+        # 更深/等长的层级覆盖旧条目：
+        #   - 更深覆盖（先一级后二级：/xwjj → [正邦动态]，再登记 [正邦动态, 公司要闻]）
+        #   - 等长覆盖（后到者优先：首页导航锚文本 vs 列表页标题同名异值时，列表页更可信）
+        #   浅条目永远不会覆盖深条目（防深层级被误判详情页降级）
+        _URL_NAV_REGISTRY[prefix] = clean
+
+
+def _lookup_url_nav(url: str) -> list:
+    """详情页/列表页查注册表：最长前缀匹配，返回最深的中文 nav_path。
+
+    /index.php/xwjj/gsyw/xxx.html →
+      先查 /index.php/xwjj/gsyw（命中 [正邦动态, 公司要闻]）→ 返回它
+      未命中则逐级缩短 → /index.php/xwjj（命中 [正邦动态]）
+    """
+    prefix = _url_path_prefix(url)
+    best: List[str] = []
+    cur = prefix
+    while True:
+        entry = _URL_NAV_REGISTRY.get(cur)
+        if entry and len(entry) > len(best):
+            best = list(entry)
+        if cur == "/" or "/" not in cur:
+            break
+        cur = cur.rsplit("/", 1)[0]
+        if not cur:
+            cur = "/"
+    return best
+
+
+def _snap_nav_to_registry(url: str, nav_path: List[str]) -> List[str]:
+    """
+    层级吸附修复：URL 已在注册表中登记层级，且与 BFS 继承的 nav_path 顶级冲突时，
+    以注册表为准（注册表来自首页导航锚文本，是站点作者定义的真实栏目层级）。
+
+    背景：同级顶级栏目页从分类页里被发现时，会继承父分类的 nav_path
+    （如"关于正邦"页里发现"发展历程"链接 → nav_path=[关于正邦]），
+    不吸附就会链式塌缩成 关于正邦/发展历程/领导关怀/... 的单子链。
+
+    同时做：连续重复去重 + 4 级封顶（MAX_NAV_DEPTH）。
+    """
+    if not nav_path:
+        return []
+    reg = _lookup_url_nav(url)
+    if reg:
+        if reg[0] != nav_path[0]:
+            # 顶级冲突 → 以注册表为准（吸附回真实栏目）
+            nav_path = list(reg)
+        elif len(reg) > len(nav_path):
+            # 顶级一致且注册表更深 → 升级补全（详情页继承列表页登记的二级/三级）
+            nav_path = list(reg)
+    # 连续重复去重（防 "栏目/栏目" 循环自嵌套）
+    deduped: List[str] = []
+    for p in nav_path:
+        if p and (not deduped or p != deduped[-1]):
+            deduped.append(p)
+    # 4 级封顶（对齐 MAX_NAV_DEPTH=4 的导航层级语义）
+    return deduped[:4]
+
+
+def _title_snap_nav(page_title: str, nav_names: Set[str]) -> Optional[List[str]]:
+    if not page_title or not nav_names:
+        return None
+    cleaned = _clean_list_title(page_title)
+    # 加 _looks_like_category_title 守卫：文章标题恰好撞名导航（如"关于正邦"为标题）时不误吸附
+    if cleaned and cleaned in nav_names and _looks_like_category_title(cleaned):
+        return [cleaned]
+    return None
+
+
+# ★ LLM 导航分类缓存（URL → nav_path），避免重复调用
+_LLM_NAV_CACHE: Dict[str, List[str]] = {}
+
+
+async def _classify_nav_path_llm(
+    url: str,
+    title: str,
+    current_nav_path: List[str],
+    nav_names: List[str],
+) -> Optional[List[str]]:
+    """
+    LLM 导航分类：当规则解析无法确定页面归属栏目时，让 LLM 基于
+    URL + 标题 + 候选一级栏目名判断该页的栏目层级（1-4 级）。
+
+    契约：
+      - 一级栏目必须从候选栏目名中选取；确定不了用空字符串
+      - 文章页的二级/三级栏目应是它所属的栏目名，不是文章标题本身
+      - 输出 JSON: {"nav_path": ["一级","二级","三级","四级"], "reason": "..."}
+      - LLM 失败/超时/未配置 → 返回 None，调用方回退规则 nav_path
+
+    结果按 URL 前缀回写注册表，同前缀的兄弟页面直接复用，控制成本。
+    """
+    if not nav_names:
+        return None
+    if url in _LLM_NAV_CACHE:
+        return _LLM_NAV_CACHE[url]
+
+    sys_prompt = (
+        "你是网站内容分类专家。给定一个网页的 URL、标题和当前候选导航路径，"
+        "判断该网页应归属的栏目层级（1-4 级，越深越具体）。\n"
+        "规则：\n"
+        "1. 一级栏目必须从候选栏目名中选取；无法确定时用空字符串。\n"
+        "2. 二/三/四级栏目根据 URL 和标题语义判断，无则空字符串。\n"
+        "3. 文章页的二级栏目应为它所属的栏目名，而不是文章标题本身。\n"
+        "4. 若当前导航路径合理（顶级正确且无多余嵌套），直接采用它。\n"
+        '5. 只返回 JSON，不要其他文字：{"nav_path":["一级","二级","三级","四级"],"reason":"一句话说明"}'
+    )
+    user_content = json.dumps({
+        "url": url,
+        "title": title or "",
+        "current_nav_path": current_nav_path or [],
+        "candidate_nav_names": nav_names,
+    }, ensure_ascii=False)
+
+    try:
+        from agents.llm_pipeline import chat_json
+        data = await chat_json(sys_prompt, user_content, max_tokens=1024, retries=1)
+    except Exception as e:
+        agent_logger.warning(f"[Graph::nav_classify] LLM 调用异常: {e}")
+        return None
+
+    if not data:
+        return None
+    raw = data.get("nav_path")
+    if not isinstance(raw, list):
+        return None
+    clean = [str(p).strip() for p in raw if p and str(p).strip()]
+    clean = _snap_nav_to_registry(url, clean)
+    if not clean:
+        return None
+    _LLM_NAV_CACHE[url] = clean
+    # 回写注册表：同 URL 前缀的兄弟页面直接复用，无需重复调 LLM
+    _register_url_nav(url, clean)
+    agent_logger.info(
+        f"[Graph::nav_classify] LLM 分类: {clean} | {url[:70]} | title={title[:20]}"
+    )
+    return clean
+
+
+def _clean_list_title(title: str) -> str:
+    """列表页标题清洗 → 栏目名。
+
+    "公司要闻_正邦集团"    → "公司要闻"
+    "正邦集团_公司要闻"    → "公司要闻"
+    "正邦动态"            → "正邦动态"
+    "公司要闻 | 正邦官网"  → "公司要闻"
+
+    规则：按常见分隔符拆分，多段时跳过站点通用词取第一段栏目名；
+          单段直接返回（可能是栏目名本身，如"集团简介"）。
+    """
+    if not title:
+        return ""
+    t = title.strip()
+    if not t:
+        return ""
+    parts = re.split(r'[_\-—|·:：\s【】\[\]()（）]+', t)
+    parts = [p.strip() for p in parts if p.strip()]
+    if not parts:
+        return t[:15]
+    if len(parts) == 1:
+        return parts[0][:15]
+    stop = {"首页", "官网", "网站", "集团", "公司", "股份", "有限",
+            "官方", "欢迎", "正邦集团", "有限公司", "主页"}
+    for p in parts:
+        if p in stop:
+            continue
+        return p[:15]
+    return parts[0][:15]
+
+
+def _looks_like_category_title(t: str) -> bool:
+    """判断清洗后的列表页标题是否像「栏目名」而非「文章标题」。
+
+    防御：详情页被 _is_list_page 误判为列表页时，若把文章标题（如
+    "正邦股份2023年报"）追加进 nav_path 并登记注册表，会污染整个
+    URL 前缀下所有页面的层级。栏目名特征：
+      - 短（≤10 字）
+      - 纯中文（不含数字/字母，过滤"2023年报""ABOUT US"等文章/英文标题）
+
+    宁可漏补全（少一级），不可错污染（层级错乱）。
+    """
+    if not t or len(t) > 10:
+        return False
+    if re.search(r'[0-9A-Za-z]', t):
+        return False
+    return True
+
+
+def _homepage_nav_js_suspected(soup: BeautifulSoup, nav_mapping: Dict[str, str]) -> bool:
+    """
+    判断首页导航是否为 JS 渲染菜单（静态 HTML 里导航容器有菜单项但几乎无 <a href> 链接）。
+
+    特征：存在 nav/menu/navbar 容器，且容器内 li 菜单项 >= 3，
+    但一级链接数 < 菜单项一半（zhengbang h_nav/h_b_nav 等 JS 菜单静态态全是
+    <li><span>栏目</span></li> 无链接，_extract_nav_mapping 提取不到任何映射）。
+
+    命中则需 Playwright 渲染首页后重新提取一级导航映射，否则注册表地基为空。
+    """
+    if len(nav_mapping) >= 5:
+        # 已提取到足够的真实映射（可能是半静态导航），无需 JS 渲染
+        return False
+    nav_container = None
+    for el in soup.find_all(["nav", "div", "ul"]):
+        cls = " ".join(el.get("class", [])) + " " + (el.get("id") or "")
+        if any(kw in cls.lower() for kw in ("nav", "menu", "navbar")):
+            nav_container = el
+            break
+    if not nav_container:
+        return False
+    items = [li for li in nav_container.find_all("li") if li.get_text(strip=True)]
+    if len(items) < 3:
+        return False
+    links = len(nav_container.find_all("a", href=True))
+    return links < max(3, len(items) // 2)
+
+
+def _extract_nav_mapping(soup: BeautifulSoup, base_url: str) -> Dict[str, str]:
+    """
+    从首页 HTML 中提取一级导航栏的（名称 → URL前缀）映射。
+
+    策略：
+    1. 查找 <nav> / class/id 含 nav/menu/navbar 的容器
+    2. 提取其中所有一级 <a> 标签的文本和 href
+    3. 排除"首页"、空链接、外链、过长名称
+    4. 返回干净的 {名称: URL前缀} 字典
+
+    Returns: {"关于我们": "/about", "产品中心": "/product", ...}
+    """
+    nav_mapping: Dict[str, str] = {}
+    seen_hrefs: Set[str] = set()
+
+    # 找到导航容器
+    nav_container = None
+    for el in soup.find_all(["nav", "div", "ul"]):
+        cls = " ".join(el.get("class", [])) + " " + (el.get("id") or "")
+        if any(kw in cls.lower() for kw in ["nav", "menu", "navbar"]):
+            nav_container = el
+            break
+    if not nav_container:
+        nav_container = soup.find("body") or soup
+
+    # 在导航容器中找第一层 <a> 标签：优先找 <ul>/<ol> 下的直接 <li> > <a>
+    top_ul = nav_container.find(["ul", "ol"])
+    if top_ul:
+        candidate_lis = top_ul.find_all("li", recursive=False)
+    else:
+        # 没有 <ul>，直接在容器中找顶层元素中的 <a>
+        candidate_lis = []
+        for child in nav_container.find_all(recursive=False):
+            if child.name in ("li", "div", "span", "p"):
+                candidate_lis.append(child)
+
+    for li in candidate_lis:
+        a_tag = None
+        if li.name == "li":
+            a_tag = li.find("a", href=True, recursive=False) or li.find("a", href=True)
+        else:
+            a_tag = li.find("a", href=True)
+
+        if not a_tag:
+            continue
+
+        name = a_tag.get_text(strip=True)
+        href = a_tag.get("href", "").strip()
+
+        # 过滤无效项
+        if not name or not href:
+            continue
+        if name in ("首页", "Home", "home", "网站首页", ""):
+            continue
+        if len(name) > 20:
+            continue
+        if href.startswith(("javascript:", "mailto:", "tel:", "#")):
+            continue
+
+        # 转绝对 URL 后提取路径前缀
+        abs_url = urljoin(base_url, href)
+        parsed = urlparse(abs_url)
+
+        # 同域名检查
+        base_parsed = urlparse(base_url)
+        if parsed.netloc.lower() != base_parsed.netloc.lower():
+            # 外链，跳过
+            continue
+
+        # 提取路径前缀（去掉末尾 / 与文件名）
+        prefix = _url_path_prefix(abs_url)
+        if prefix == "/" or prefix in seen_hrefs:
+            continue
+        seen_hrefs.add(prefix)
+
+        nav_mapping[name] = prefix
+
+    return nav_mapping
+
+
+# ============================================================================
+# 两段式 LLM 正文定位（BFS + LLM 清洗整合：详情页正文容器由 LLM 定位，
+# 模板缓存按 URL 形态复用，同站同模板后续页面免 LLM）
+# ============================================================================
+
+# 缓存: URL 形态 key -> content_selector（同站同模板只需 LLM 定位一次）
+_CONTENT_SELECTOR_CACHE: Dict[str, str] = {}
+
+# ★ 选择器缓存持久化：站点正文容器选择器稳定不变，落盘后跨运行复用，
+#   避免每次运行都重新付 LLM 定位耗时（正邦 22 次定位 ≈ 477s，缓存后归零）
+_SELECTOR_CACHE_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "selector_cache.json"
+)
+
+
+def _load_selector_cache() -> Dict[str, str]:
+    """启动时从磁盘加载持久化的正文选择器缓存"""
+    import json
+    try:
+        if os.path.exists(_SELECTOR_CACHE_PATH):
+            with open(_SELECTOR_CACHE_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and data:
+                _CONTENT_SELECTOR_CACHE.update(data)
+                agent_logger.info(
+                    f"[Graph::llm_locate] 已加载持久化选择器缓存 {len(data)} 条"
+                )
+    except Exception as e:
+        agent_logger.warning(f"[Graph::llm_locate] 选择器缓存加载失败: {e}")
+    return _CONTENT_SELECTOR_CACHE
+
+
+def _save_selector_cache() -> None:
+    """将选择器缓存落盘（缓存条目少、写盘频率低，直接全量写）"""
+    import json
+    try:
+        with open(_SELECTOR_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(_CONTENT_SELECTOR_CACHE, f, ensure_ascii=False)
+    except Exception as e:
+        agent_logger.warning(f"[Graph::llm_locate] 选择器缓存写入失败: {e}")
+
+
+# 模块加载即读入历史缓存
+_load_selector_cache()
+
+
+def _url_template_key(page_url: str) -> str:
+    """URL 形态 key：路径中数字段 → {N}，如 /info/1591/239441.htm → /info/{N}/{N}.htm"""
+    try:
+        path = urlparse(page_url).path
+        return re.sub(r"\d+", "{N}", path) or page_url
+    except Exception:
+        return page_url
+
+
+def _selector_quality_ok(html: str, selector: str) -> bool:
+    """校验 selector 定位到的元素是否像真实正文容器（防缓存误用）。
+    文本 ≥100 字、链接密度 ≤0.35、导航词占比不异常 → 合格。"""
+    if not selector or not html:
+        return False
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        el = soup.select_one(selector)
+        if el is None:
+            return False
+        text = el.get_text(" ", strip=True)
+        if len(text) < 100:
+            return False
+        links = len(el.find_all("a"))
+        if links / max(len(text), 1) > 0.35:
+            return False
+        nav_hits = sum(text.count(k) for k in ("网站首页", "关于我们", "新闻中心", "联系我们", "网站地图"))
+        if nav_hits > 8 and len(text) < 3000:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+async def _llm_locate_content_selector(
+    html: str, page_url: str, home_url: str, gsmc: str
+) -> str:
+    """
+    两段式 LLM 定位正文容器：返回 CSS 选择器（如 '#content' / '.article-body'）。
+    命中 URL 形态缓存直接返回（带质量校验，不合格则弃缓存重定位）；
+    未命中才调 LLM，定位成功后泛化（#vsb_content_1003 → [id^="vsb_content_"]）并缓存。
+    失败/无 selector → 返回 ""，调用方回退到代码启发式 _find_main_content。
+    """
+    if not html:
+        return ""
+    tkey = _url_template_key(page_url)
+    # ★ 缓存 key 带域名前缀，防止不同站点同路径形态共用选择器
+    ckey = f"{urlparse(page_url).netloc}|{tkey}"
+    if ckey in _CONTENT_SELECTOR_CACHE:
+        cached = _CONTENT_SELECTOR_CACHE[ckey]
+        if _selector_quality_ok(html, cached):
+            return cached
+        # 缓存 selector 在当前页面定位到非正文区（如导航），弃用并重新定位
+        agent_logger.warning(
+            f"[Graph::llm_locate] 模板缓存 {tkey}->{cached} 质量校验失败，重新定位 | {page_url[:60]}"
+        )
+        del _CONTENT_SELECTOR_CACHE[ckey]
+        _save_selector_cache()
+
+    try:
+        prompt = get_prompt("清洗提示词.txt")
+        two_stage_note = (
+            "\n\n【两段式执行说明（必须遵守）】本任务采用两段式清洗："
+            "你只需输出正文容器定位选择器 content_selector（CSS 选择器，如 '#content' 或 '.article-body'）"
+            "以及 title / riqi / source / author / views；content_html 字段输出空字符串，"
+            "正文 HTML 由系统按 content_selector 从原站 DOM 原样提取（保留 class/style）。"
+            "extract_status 照常输出 success/failed。"
+        )
+        compressed = compress_html(html)
+        user_content = (
+            f"gsmc: {gsmc}\n首页 URL: {home_url}\n当前页面 URL: {page_url}\n"
+            f"当前页面 HTML（压缩版）:\n{compressed}"
+            f"{two_stage_note}"
+        )
+        meta = await chat_json(prompt, user_content)
+        if not isinstance(meta, dict):
+            return ""
+        selector = (meta.get("content_selector") or meta.get("selector") or "").strip()
+        # 校验 + 泛化：页面级独立 ID（如 #vsb_content_1003）→ 前缀匹配，覆盖同站其他模板实例
+        if selector and _selector_quality_ok(html, selector):
+            m = re.match(r"^#([A-Za-z_]\w*?)_\d+$", selector)
+            if m:
+                general = f'[id^="{m.group(1)}_"]'
+                if _selector_quality_ok(html, general):
+                    selector = general
+            _CONTENT_SELECTOR_CACHE[ckey] = selector
+            _save_selector_cache()  # ★ 定位成功后立即落盘，跨运行复用
+            agent_logger.info(
+                f"[Graph::llm_locate] 详情页正文定位成功，已缓存模板 "
+                f"{tkey} -> {selector} | {page_url[:60]}"
+            )
+            return selector
+    except Exception as e:
+        agent_logger.warning(f"[Graph::llm_locate] LLM 定位失败，回退代码启发式 | {e}")
+    return ""
+
+
+def _build_structured_content(rescued_html: str, page_url: str = "", content_selector: str = "") -> str:
     """
     从 rescued HTML 构建保留结构的清洁正文（用于填入固定模板）。
 
@@ -2736,8 +3380,17 @@ def _build_structured_content(rescued_html: str, page_url: str = "") -> str:
     for comment in body.find_all(string=lambda t: isinstance(t, Comment)):
         comment.extract()
 
-    # ── 2. 定位主内容区 ──
-    content = _find_main_content(soup, page_url)
+    # ── 2. 定位主内容区：优先两段式 LLM 定位的正文容器，否则代码启发式 ──
+    content = None
+    if content_selector:
+        try:
+            el = soup.select_one(content_selector)
+            if el is not None:
+                content = el
+        except Exception:
+            content = None
+    if content is None:
+        content = _find_main_content(soup, page_url)
     if not content:
         # 回退：使用整个 body
         content = body
@@ -2746,6 +3399,7 @@ def _build_structured_content(rescued_html: str, page_url: str = "") -> str:
     _DECO_IMG_PATTERNS = re.compile(
         r'(szicbok\.gif|cn\.gif|en\.gif|tubiao\.png|template/default/images/'
         r'|icons?\.|logos?\.|banner|avatar|favicon|1x1|pixel|qrcode|erweima|二维|扫码|wechat'
+        r'|contentwx|wx_code|qr_code|weixin|saoyisao'
         r'|site\.(jpg|jpeg|png|gif))',
         re.I,
     )
@@ -3289,10 +3943,120 @@ def _strip_nav_noise(html: str) -> str:
         el.decompose()
         removed += 1
 
+    # 10. 站点头部残留（搜索框/页头右侧工具条/顶部条）整块删除。
+    #     zhengbang 等建站模板：.search 放大镜搜索框、.h_r_content 页头右侧、
+    #     .topbar/.header-top 顶部工具条等，非正文内容。
+    #     安全阀：含 h1-h6（可能是内容标题）不删；文本 > 200 不删；
+    #     命中正文信号（日期/共条/页码）视为内容列表，不删。
+    #     注意：空文本的搜索图标（放大镜 <a class="search"></a>）也删（class 已命中 search 关键词）。
+    _head_residue = re.compile(
+        r'(search|headsearch|head-search|searchbox|search-box|searchbar|search-bar|'
+        r'searchbtn|search-btn|headsearchform|h_r_content|topbar|top-bar|top_bar|'
+        r'header-top|header-topbar|headertop|site-top|site_top|sitetop)', re.I
+    )
+    for el in soup.find_all(["div", "ul", "ol", "section", "header", "nav", "a", "span"]):
+        attrs = getattr(el, "attrs", None) or {}
+        cls = " ".join(attrs.get("class") or [])
+        cid = attrs.get("id") or ""
+        if not (_head_residue.search(cls) or _head_residue.search(cid)):
+            continue
+        if el.find(["h1", "h2", "h3", "h4", "h5", "h6"]):
+            continue
+        t = el.get_text(" ", strip=True)
+        if len(t) > 200:
+            continue
+        if re.search(
+            r'\d{4}[-/年]\d{1,2}|共\s*\d+\s*条|第\s*\d+\s*页|下一页|\d{1,2}[-/]\d{1,2}', t
+        ):
+            continue
+        el.decompose()
+        removed += 1
+
     if removed:
         agent_logger.info(f"[Graph::clean] 去除导航栏残留 {removed} 处")
 
     return str(soup)
+
+
+def _has_substantial_content(text: str, html: str = "") -> bool:
+    """列表页落盘判定：是否为"长文章"正文（含 ≥200 字连续段落 或 超长文本）。
+
+    关键洞察：列表页/栏目页（导航 + 新闻条目列表）BS4 清洗后文本可能上千字
+    （每条新闻标题+摘要累加），但都是短条目；而详情页正文包含 ≥200 字的连续段落。
+    若仅按总字数判定，列表页（如 jtyw.htm 要闻列表）会被误存为 HTML 文件，
+    且其 <title> 是"最新新闻标题"，会抢占详情页文件名导致 _N 文件爆炸。
+
+    判定信号（从清洗后 HTML 提取）:
+      1. 存在 ≥200 字的 <p> 段落 → 详情页正文特征，落盘
+      2. <h4> 条目 ≥4 个 → 列表/轮播页特征，不落盘
+      3. 总文本 ≥3000 字 → 误判为列表页的长文详情页，落盘
+    """
+    if not text:
+        return False
+    if html:
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+        except Exception:
+            return len(text) >= 1500
+        # 条目型列表优先判定：h4 标题条目过多（≥4）→ 列表页/轮播页，不落盘。
+        # 必须先于长段落判断——列表页的新闻摘要 <p> 单条也可能超 200 字，若先查段落会被误放行。
+        h4_cnt = len(soup.find_all("h4"))
+        if h4_cnt >= 4:
+            return False
+        # 长段落信号：详情页正文含 ≥200 字连续段落
+        max_para = max(
+            (len(p.get_text(" ", strip=True)) for p in soup.find_all("p")),
+            default=0,
+        )
+        if max_para >= 200:
+            return True
+        # 超长文本（误判为列表页的长文详情页）→ 落盘
+        if len(text) >= 3000:
+            return True
+        return False
+    return len(text) >= 1500
+
+
+def _extract_publish_date(html: str) -> str:
+    """从模板 HTML 提取发布日期（header 区 meta："发布时间：2025-09-18"）"""
+    m = re.search(r"(\d{4}-\d{2}-\d{2})", html or "")
+    return m.group(1) if m else ""
+
+
+def _detail_content_ok(text: str, html: str) -> bool:
+    """detail 页落盘前质量校验。
+
+    拦截两类坏结果:
+      1. 空壳页：正文 <80 字（选择器命中 meta/标题区，如"领导班子成员调整"只剩
+         "浏览量/发布时间"；哈电等站常见），无实质文章内容 → 不落盘
+      2. 列表容器误当正文：正文区链接密度过高（LLM 选择器命中了新闻列表容器，
+         正文全是链接标题），如 /xwzx.htm → .nyMain.nyxwzx → 不落盘
+    """
+    if len(text) < 80:
+        return False
+    # 只统计正文容器 <article class="content"> 内的文本与链接，
+    # 排除 header（标题/meta 重复）与页脚（source-info），避免虚高放行
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        art = soup.select_one("article.content")
+    except Exception:
+        art = None
+    if art is None:
+        return True
+    # 排除标题区（.ar_tit：标题 + 浏览量/发布时间 meta），防标题长度虚高放行空壳
+    for el in art.select(".ar_tit"):
+        el.decompose()
+    body_text = re.sub(r"\s+", "", art.get_text("", strip=True))
+    # 正文总文本 <50 字 → 空壳（只有标题/meta 无实质内容）
+    if len(body_text) < 50:
+        return False
+    # 列表容器误当正文：正文区链接密度过高（LLM 选择器命中了新闻列表容器，正文全是链接标题）
+    # 注：正文可能无 <p> 标签（裸文本+<br/> 分行，哈电常见），故不做"最长段落"硬判定，
+    #   以免误伤正常正文；空壳与列表容器分别由上述两重检查拦截。
+    a_cnt = len(art.find_all("a"))
+    if a_cnt >= 8 and a_cnt / max(1, len(body_text)) > 0.08:
+        return False
+    return True
 
 
 async def _save_html_file(page: PageData, output_dir: str) -> str:
@@ -3337,6 +4101,8 @@ async def _save_html_file(page: PageData, output_dir: str) -> str:
         path = parsed.path.strip("/")
         name = path.split("/")[-1] if path else "page"
         name = re.sub(r'\.[^.]+$', '', name)
+    # ★ 分页/列表标题归一化："岗位列表 - 第2页" → "岗位列表"（防同标题分页页反复生成 _N 文件）
+    name = re.sub(r'[\s\-—·:：_]*第\s*\d+\s*页[\s\-—·:：_]*$', '', name).strip()
     name = re.sub(r'\s+', ' ', name)  # 换行/制表符等空白 → 单个空格（防止文件名含 \r\n 导致 Invalid argument）
     name = re.sub(r'[\\/:*?"<>|]', "_", name).strip("._ ")[:60] or "page"
 
@@ -3344,14 +4110,29 @@ async def _save_html_file(page: PageData, output_dir: str) -> str:
     os.makedirs(dir_path, exist_ok=True)
 
     file_path = os.path.join(dir_path, f"{name}.html")
-    # 冲突处理
-    counter = 1
-    while os.path.exists(file_path):
-        file_path = os.path.join(dir_path, f"{name}_{counter}.html")
-        counter += 1
+    norm_path = os.path.normpath(file_path)
+    if norm_path in _saved_html_paths:
+        # ★ 本次运行已保存过同名文件（真实同名冲突）→ 优先用「标题_发布日期」区分
+        #   （同标题不同日期的文章，如哈电多篇"领导班子成员调整"公告），
+        #   提取不到日期再回退 _N 后缀。
+        date_str = _extract_publish_date(page.html or "")
+        if date_str:
+            file_path = os.path.join(dir_path, f"{name}_{date_str}.html")
+            norm_path = os.path.normpath(file_path)
+            counter = 1
+            while norm_path in _saved_html_paths or os.path.exists(file_path):
+                file_path = os.path.join(dir_path, f"{name}_{date_str}_{counter}.html")
+                norm_path = os.path.normpath(file_path)
+                counter += 1
+        else:
+            counter = 1
+            while os.path.exists(file_path):
+                file_path = os.path.join(dir_path, f"{name}_{counter}.html")
+                counter += 1
+            norm_path = os.path.normpath(file_path)
+    # 否则：磁盘上若存在同名文件（上次运行残留），直接覆盖写，不生成 _N.html
 
     # ── 路径级去重：同一路径只写一次（防止 LangGraph 状态循环导致重复调用） ──
-    norm_path = os.path.normpath(file_path)
     if norm_path in _saved_html_paths:
         agent_logger.info(f"[Graph::save] 跳过重复文件: {norm_path}")
         return os.path.relpath(file_path, output_dir)
@@ -3366,6 +4147,10 @@ async def _save_html_file(page: PageData, output_dir: str) -> str:
 
 
 def _write_html_file(path: str, html: str) -> None:
+    # ★ base64 图片外置：正文内嵌 data URI（单张数百 KB，哈电等站常见）会把单个
+    #   HTML 撑到数 MB。解码存为独立图片文件，<img src> 替换为相对路径引用。
+    if html and "data:image/" in html:
+        html = _externalize_base64_images(path, html)
     with open(path, "w", encoding="utf-8") as f:
         if html.strip().startswith("<!DOCTYPE") or html.strip().startswith("<html"):
             # 已是完整文档（模板模式），直接写入
@@ -3382,6 +4167,51 @@ def _write_html_file(path: str, html: str) -> None:
             f.write("\n</body>\n</html>")
 
 
+def _externalize_base64_images(path: str, html: str) -> str:
+    """把 HTML 中的 data:image base64 图解码存盘，<img src> 替换为相对路径引用。
+
+    图片存到 HTML 同级目录下的 img/ 子目录，文件名 = HTML 名_img_序号.扩展名。
+    相同内容（md5）只存一份；<100 字节的 1px 占位图不落盘（保留原样）。
+    """
+    import base64
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+    except Exception:
+        return html
+    img_dir = os.path.join(os.path.dirname(path), "img")
+    stem = os.path.splitext(os.path.basename(path))[0]
+    ext_map = {"jpeg": "jpg", "jpg": "jpg", "png": "png", "gif": "gif", "webp": "webp"}
+    seen: dict = {}  # md5(raw) -> 相对路径
+    counter = 0
+    changed = False
+    for img in soup.find_all("img"):
+        src = img.get("src") or ""
+        m = re.match(r"^data:(image/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$", src, re.I)
+        if not m:
+            continue
+        ext = ext_map.get(m.group(1).split("/")[-1].lower(), "bin")
+        try:
+            raw = base64.b64decode(m.group(2))
+        except Exception:
+            continue
+        if len(raw) < 100:  # 1px 占位图无价值，避免垃圾文件
+            continue
+        key = hashlib.md5(raw).hexdigest()[:12]
+        if key in seen:
+            rel = seen[key]
+        else:
+            os.makedirs(img_dir, exist_ok=True)
+            counter += 1
+            fname = f"{stem}_img_{counter}.{ext}"
+            with open(os.path.join(img_dir, fname), "wb") as f:
+                f.write(raw)
+            rel = "img/" + fname
+            seen[key] = rel
+        img["src"] = rel
+        changed = True
+    return str(soup) if changed else html
+
+
 def _sanitize_dirname(name: str) -> str:
     import re
     name = re.sub(r'\s+', ' ', name)  # 换行/制表符等空白 → 单个空格
@@ -3392,6 +4222,32 @@ def _sanitize_dirname(name: str) -> str:
 # ============================================================================
 # CSV 写入
 # ============================================================================
+
+def _slim_html_for_csv(html: str, max_imgs: int = 50) -> str:
+    """CSV 瘦身：全量 HTML（含 base64 图，单行可达数 MB）→ 正文纯文本 + 图片 URL 列表。
+
+    图片 data URI 不写入（体积巨大），仅保留远程 URL；提取失败则截断原文兜底。
+    """
+    if not html:
+        return ""
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+    except Exception:
+        return html[:2000]
+    art = soup.select_one("article.content") or soup.find("body")
+    text = art.get_text("\n", strip=True) if art else ""
+    img_urls = []
+    for img in soup.find_all("img"):
+        src = img.get("src") or img.get("data-src") or ""
+        if src and not src.startswith("data:"):
+            img_urls.append(src)
+    parts = []
+    if text:
+        parts.append("【正文】\n" + text)
+    if img_urls:
+        parts.append("【图片URL】\n" + "\n".join(img_urls[:max_imgs]))
+    return "\n\n".join(parts) if parts else html[:2000]
+
 
 async def _write_csv(csv_path: str, rows: List[Dict[str, str]]) -> None:
     """写入 CSV（带 BOM，文件锁保护）"""
