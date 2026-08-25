@@ -63,6 +63,16 @@ CONTENT_QUALITY_MIN_CHARS = int(os.getenv("CONTENT_QUALITY_MIN_CHARS", "100"))
 # 是否启用内容质量过滤（false / 0 关闭）
 CONTENT_QUALITY_FILTER_ENABLED = os.getenv("CONTENT_QUALITY_FILTER_ENABLED", "true").lower() in ("true", "1", "yes")
 
+# ==================== 自适应 LLM 清洗配置（分层方案 Tier3） ====================
+# off     = 不使用（保持现状，纯规则清洗）
+# dry_run = 只计算质量分并记录疑难页 reason，不升级（用于标定阈值）
+# on      = 质量分不合格的页面升级整篇 LLM 清洗（疑难页才花一次全篇 LLM）
+ADAPTIVE_LLM_CLEAN = os.getenv("ADAPTIVE_LLM_CLEAN", "off").lower()
+# 质量分阈值（0-1，低于该值视为疑难页，触发升级）。分数越低质量越差。
+ADAPTIVE_LLM_QUALITY_THRESHOLD = float(os.getenv("ADAPTIVE_LLM_QUALITY_THRESHOLD", "0.6"))
+# 单次运行升级上限：疑难页过多时熔断，防止 LLM 被全篇清洗打爆
+ADAPTIVE_LLM_MAX_UPGRADES = int(os.getenv("ADAPTIVE_LLM_MAX_UPGRADES", "50"))
+
 # ==================== Phase 2: HITL 人工介入配置 ====================
 HITL_BATCH_SAVE_THRESHOLD = int(os.getenv("HITL_BATCH_SAVE_THRESHOLD", "1000"))  # 单次保存超过此数量触发中断
 HITL_TOKEN_COST_THRESHOLD = float(os.getenv("HITL_TOKEN_COST_THRESHOLD", "10.0"))  # Token 累计费用超过 $10 触发中断

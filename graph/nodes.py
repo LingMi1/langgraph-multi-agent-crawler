@@ -40,6 +40,17 @@ def _get_llm_semaphore() -> asyncio.Semaphore:
         _LLM_SEMAPHORE = asyncio.Semaphore(_LLM_MAX_CONCURRENCY)
     return _LLM_SEMAPHORE
 
+# ── 自适应 LLM 清洗统计（分层方案 Tier3，模块级累加，dry_run/on 共用） ──
+_ADAPTIVE_STATS: Dict[str, Any] = {
+    "total": 0,       # 参与分诊的页面数
+    "flagged": {},    # reason → 数量（疑难页分布）
+    "upgraded": 0,    # 实际触发升级次数
+    "ok": 0,          # 升级成功且采用
+    "reject": 0,      # 升级产物不合格被拒
+    "fail": 0,        # 升级调用失败回退
+    "func_skip": 0,   # 功能页/二维码页跳过升级（后续丢弃，不浪费 LLM）
+}
+
 # 复用现有 Agent 模块
 from agents.scout import PageScout
 from agents.nav import NavigationParser
@@ -1526,22 +1537,88 @@ async def _process_one_url(
         rescued_html, url, content_selector=llm_selector
     )
 
-    # ── 内容有效性检查：正文过短 / 二维码聚合页（官方微信/微博/微群等）→ 丢弃 ──
-    # 二维码聚合页特征：正文是"官方微信/官方微博/微群/易企秀"等二维码图集+链接列表，
-    # 无实质文章内容（zhengbang 的 /contact/zbwq.html 正邦微群、易企秀页等）。
-    _check_text = re.sub(r'<[^>]+>', '', structured_body).strip()
+    # ── 页面性质判定：二维码聚合页 / 功能页（联系、招聘、留言等）──
+    # 先于自适应升级判断，避免 LLM 把功能页"救活"后落盘（联系页 13→89 的教训）
+    _check_text = re.sub(r'<[^>]+>', '', structured_body)
     _check_text = re.sub(r'\s+', '', _check_text)  # 去掉所有空白
     _QR_PAGE_RE = re.compile(
         r'(官方微信|官方微博|微群|易企秀|扫码|二维码|关注公众号|微信公众号)', re.I
     )
     _is_qr_page = bool(
-        _QR_PAGE_RE.search(cleaned.title or "")
-        or _QR_PAGE_RE.search(_check_text)
+        _QR_PAGE_RE.search(cleaned.title or "") or _QR_PAGE_RE.search(_check_text)
     )
-    if len(_check_text) < 80 or (_is_qr_page and len(_check_text) < 200):
+    _FUNC_PAGE_RE = re.compile(
+        r'(联系我们|联系方式|在线留言|留言板|建言献策|意见反馈|在线客服|'
+        r'人才招聘|校园招聘|社会招聘|在线招聘|招贤纳士|投资者关系|定期报告|'
+        r'网站地图|友情链接|免责声明|隐私政策|法律声明|版权声明|'
+        r'登录|注册|投诉|举报)',
+        re.I,
+    )
+    _is_func_page = bool(
+        _FUNC_PAGE_RE.search(cleaned.title or "") or _FUNC_PAGE_RE.search(_check_text)
+    )
+
+    # ── 自适应 LLM 清洗（分层方案 Tier3）：规则分诊 → 疑难页升级整篇 LLM 清洗 ──
+    # off=不启用 / dry_run=只统计不升级（标定阈值用）/ on=升级
+    adaptive_mode = getattr(config, "ADAPTIVE_LLM_CLEAN", "off")
+    if adaptive_mode != "off":
+        q_score, q_reasons = _compute_content_quality(structured_body)
+        _ADAPTIVE_STATS["total"] += 1
+        threshold = getattr(config, "ADAPTIVE_LLM_QUALITY_THRESHOLD", 0.6)
+        if q_score < threshold:
+            reason_key = ",".join(q_reasons) or "unknown"
+            _ADAPTIVE_STATS["flagged"][reason_key] = _ADAPTIVE_STATS["flagged"].get(reason_key, 0) + 1
+            if adaptive_mode == "dry_run":
+                agent_logger.info(
+                    f"[Graph::adaptive_clean][dry_run] 疑难页 score={q_score} reason={reason_key}"
+                    f"{'（功能页）' if _is_qr_page or _is_func_page else ''} | {url[:60]}"
+                )
+            elif adaptive_mode == "on" and _ADAPTIVE_STATS["upgraded"] < getattr(
+                config, "ADAPTIVE_LLM_MAX_UPGRADES", 50
+            ):
+                if _is_qr_page or _is_func_page:
+                    # 功能页/二维码页后续会被丢弃，不浪费 LLM 升级（联系页 13→89 的教训）
+                    _ADAPTIVE_STATS["func_skip"] = _ADAPTIVE_STATS.get("func_skip", 0) + 1
+                    agent_logger.info(
+                        f"[Graph::adaptive_clean] {'二维码聚合页' if _is_qr_page else '功能页'}跳过升级（将丢弃） | {url[:60]}"
+                    )
+                else:
+                    _ADAPTIVE_STATS["upgraded"] += 1
+                    llm_body = await _llm_clean_content_html(rescued_html, url, site_name, cleaned.title or "")
+                    if llm_body:
+                        # 采用校验：升级产物须有实质文本（不低于原正文 60% 或 ≥80 字），避免 LLM 空转
+                        new_text = re.sub(r"<[^>]+>", "", llm_body)
+                        new_text = re.sub(r"\s+", "", new_text)
+                        old_text = re.sub(r"<[^>]+>", "", structured_body)
+                        old_text = re.sub(r"\s+", "", old_text)
+                        if len(new_text) >= max(80, int(len(old_text) * 0.6)):
+                            structured_body = llm_body
+                            _ADAPTIVE_STATS["ok"] += 1
+                            agent_logger.info(
+                                f"[Graph::adaptive_clean] 升级成功 reason={reason_key} "
+                                f"text={len(old_text)}→{len(new_text)} | {url[:60]}"
+                            )
+                        else:
+                            _ADAPTIVE_STATS["reject"] += 1
+                            agent_logger.info(
+                                f"[Graph::adaptive_clean] 升级产物过短({len(new_text)}字)保留原正文 | {url[:60]}"
+                            )
+                    else:
+                        _ADAPTIVE_STATS["fail"] += 1
+                        agent_logger.info(
+                            f"[Graph::adaptive_clean] 升级调用失败回退原正文 | {url[:60]}"
+                        )
+
+    # ── 内容有效性检查：正文过短 / 二维码聚合页 / 功能页 → 丢弃 ──
+    # 二维码聚合页：正文是"官方微信/官方微博/微群/易企秀"等二维码图集+链接列表；
+    # 功能页：联系我们/人才招聘/投资者关系/在线留言等薄页面（低价值，非文章内容）。
+    # 两者仅在文本过短（<200 字）时丢弃，长内容页（如招聘正文）不受影响。
+    _check_text = re.sub(r'<[^>]+>', '', structured_body)
+    _check_text = re.sub(r'\s+', '', _check_text)  # 基于最终正文（升级可能替换过）重新计算
+    if len(_check_text) < 80 or ((_is_qr_page or _is_func_page) and len(_check_text) < 200):
+        _drop_tag = '/二维码聚合页' if _is_qr_page else ('/功能页' if _is_func_page else '')
         agent_logger.info(
-            f"[Graph::fetch_extract] 正文过短({len(_check_text)}字)"
-            f"{'/二维码聚合页' if _is_qr_page else ''}，丢弃 | {url[:60]}"
+            f"[Graph::fetch_extract] 正文过短({len(_check_text)}字){_drop_tag}，丢弃 | {url[:60]}"
         )
         stats["skipped"] = stats.get("skipped", 0) + 1
         return []
@@ -2551,6 +2628,17 @@ async def storage_node(state: CrawlerState) -> dict:
     output_dir = state.get("output_dir", "")
     stats = state.get("stats", {})
 
+    # ── 打印自适应 LLM 清洗统计（分层方案 Tier3，dry_run/on 共用） ──
+    if _ADAPTIVE_STATS["total"] > 0:
+        agent_logger.info(
+            "[Graph::adaptive_clean] 汇总 "
+            f"total={_ADAPTIVE_STATS['total']} flagged={sum(_ADAPTIVE_STATS['flagged'].values())} "
+            f"upgraded={_ADAPTIVE_STATS['upgraded']} ok={_ADAPTIVE_STATS['ok']} "
+            f"reject={_ADAPTIVE_STATS['reject']} fail={_ADAPTIVE_STATS['fail']} "
+            f"func_skip={_ADAPTIVE_STATS.get('func_skip', 0)} "
+            f"reason分布={dict(_ADAPTIVE_STATS['flagged'])}"
+        )
+
     # ★ 按 URL 去重（保留最后一条，避免重入队 / 状态合并产生的重复行）
     _dedup: Dict[str, Dict] = {}
     for row in results:
@@ -3519,6 +3607,101 @@ async def _llm_locate_content_selector(
     except Exception as e:
         agent_logger.warning(f"[Graph::llm_locate] LLM 定位失败，回退代码启发式 | {e}")
     return ""
+
+
+def _compute_content_quality(structured_body: str) -> Tuple[float, List[str]]:
+    """
+    规则质量分诊（分层方案 Tier3 的 gate，纯规则、不花 LLM）。
+
+    返回 (score, reasons)：score ∈ [0,1]，越高质量越好；
+    reasons 记录扣分信号（text_short / link_dense / nav_residue / no_paragraph）。
+    低于 config.ADAPTIVE_LLM_QUALITY_THRESHOLD 视为疑难页 → 升级整篇 LLM 清洗。
+    """
+    if not structured_body or not structured_body.strip():
+        return 0.0, ["empty_body"]
+    try:
+        text = re.sub(r"<[^>]+>", " ", structured_body)
+        text = re.sub(r"\s+", " ", text).strip()
+        n = len(text)
+        score = 1.0
+        reasons: List[str] = []
+
+        # 1. 文本长度：过短说明正文提取失败（公告页天然短，此处宽松，200 以下才扣）
+        if n < 80:
+            score -= 0.55
+            reasons.append("text_short")
+        elif n < 200:
+            score -= 0.25
+            reasons.append("text_short")
+
+        # 2. 链接密度：正文全是链接标题（坏选择器命中列表/导航容器）→ 降分
+        links = len(re.findall(r"<a\b", structured_body))
+        if n > 0 and links / n > 0.05:
+            score -= 0.35
+            reasons.append("link_dense")
+
+        # 3. 残留噪音词：面包屑/分页/上下篇/版权/二维码等
+        _NAV_PAT = re.compile(
+            r"(您的位置|当前位置|面包屑|共\s*\d+\s*条|第\s*\d+\s*页|"
+            r"上一篇|下一篇|上一条|下一条|版权所有|ICP备|官方微信|"
+            r"扫码|二维码|返回列表|返回首页)",
+            re.I,
+        )
+        hits = _NAV_PAT.findall(text)
+        if hits:
+            score -= min(0.5, 0.12 * len(hits))
+            reasons.append(f"nav_residue:{hits[0]}")
+
+        # 4. 段落结构：长文本却无 <p>（结构可疑，可能是堆砌的导航文本）
+        p_cnt = len(re.findall(r"<p\b", structured_body))
+        if p_cnt == 0 and n >= 200:
+            score -= 0.2
+            reasons.append("no_paragraph")
+
+        score = max(0.0, min(1.0, score))
+        return round(score, 3), reasons
+    except Exception:
+        return 0.5, ["unknown"]
+
+
+async def _llm_clean_content_html(
+    rescued_html: str, page_url: str, gsmc: str, title: str
+) -> str:
+    """
+    整篇 LLM 清洗（分层方案 Tier3 升级路径）：把 rescued HTML 喂 LLM，
+    直接输出清洗后的干净正文 HTML 片段（复用"清洗提示词.txt"契约）。
+    失败 / 无结果 / 状态非 success → 返回 ""，调用方回退原 structured_body。
+    """
+    if not rescued_html:
+        return ""
+    try:
+        prompt = get_prompt("清洗提示词.txt")
+        full_clean_note = (
+            "\n\n【整篇清洗执行说明（必须遵守）】本任务为整篇清洗模式，与两段式不同："
+            "你必须在 content_html 字段输出去噪后的完整正文 HTML 片段（保留原网页 class/style），"
+            "而不是空字符串。仅输出正文内容本身，不含 header/footer/nav/breadcrumb/分页等噪音。"
+            "按清洗提示词规则删除正文中的联系方式（电话/传真/邮箱/网址/微信/QQ/地址，与博宇清洗规则一致）。"
+            "若正文确实无法识别，extract_status 输出 failed，content_html 输出空字符串。"
+        )
+        compressed = compress_html(rescued_html, max_len=40000)
+        user_content = (
+            f"gsmc: {gsmc}\nurl: {page_url}\ntitle: {title}\n"
+            f"raw_html（压缩版）:\n{compressed}"
+            f"{full_clean_note}"
+        )
+        meta = None
+        async with _get_llm_semaphore():  # ★ 与定位/分类共用信号量，防止打爆内网端点
+            meta = await chat_json(prompt, user_content, max_tokens=8192)
+        if not isinstance(meta, dict):
+            return ""
+        status = (meta.get("extract_status") or "").lower()
+        body = (meta.get("content_html") or "").strip()
+        if status != "success" or not body:
+            return ""
+        return body
+    except Exception as e:
+        agent_logger.warning(f"[Graph::llm_clean] 整篇清洗失败，回退原正文 | {e}")
+        return ""
 
 
 def _build_structured_content(rescued_html: str, page_url: str = "", content_selector: str = "") -> str:

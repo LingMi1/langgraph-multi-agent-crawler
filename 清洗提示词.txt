@@ -69,10 +69,17 @@ title 必须是页面正文的主标题，正文区域没有标题时回退到�
   header、footer、nav、banner、menu、breadcrumb、sidebar、share、comment、related、recommend、pagination、copyright、qrcode、ewm、friend-link、scroll-top、kefu、customer-service
 - 上一页/下一页/翻页相关元素
 - 客服浮动按钮、广告位、登录注册入口
+- 返回顶部/返回列表按钮、分享按钮、社交分享组件
 
 注意：移除面包屑容器（class 含 breadcrumb/location/crumb）只影响 content_html 输出，不影响 title 提取——title 必须在清洗前从原始 raw_html 中提取。
 
+# 联系方式处理（与博宇清洗规则一致）
+- 删除正文中的联系方式信息：电话、传真、邮箱、网址、微信、QQ、地址、联系人等
+- 整段删除包含上述联系方式的段落/行（如"电话：138xxxx"、"邮箱：xx@xx.com"、"地址：xx省xx市xx路"）
+- 仅删除联系方式类信息，不得误删正文内容
+
 # 必须保留的内容
+- 产品介绍、新闻正文、公司简介、项目信息等正文内容（与博宇清洗规则一致）
 - `<article>`、`<main>`、`<section>`、`.content`、`.article`、`.detail`、`.main` 等正文容器
 - 所有正文段落 `<p>`、标题 `<h1>`-`<h6>`、列表 `<ul><ol><li>`、表格 `<table>`
 - 所有正文图片 `<img>`、`<figure>`、`<picture>`
@@ -82,7 +89,7 @@ title 必须是页面正文的主标题，正文区域没有标题时回退到�
 # 图片处理
 - 保留原 `<img>` 标签的所有属性（src、alt、class、style、width、height）
 - 给每个 `<img>` 添加 `referrerpolicy="no-referrer"`（防盗链必需）
-- **删除噪音图片**：class 或 src 含 logo、banner、icon、qrcode、ewm、favicon、spacer、placeholder 的 `<img>`
+- **删除噪音图片**：class 或 src 含 logo、banner、icon、qrcode、ewm、favicon、spacer、placeholder、ad、tracking、pixel、beacon、analytics、share 的 `<img>`（含广告横幅/追踪像素/社交分享图标，与博宇清洗规则一致）
 - 删除 width 或 height 小于 50px 的装饰小图
 
 # 链接处理
@@ -130,5 +137,6 @@ title 必须是页面正文的主标题，正文区域没有标题时回退到�
 □ 所有 `<img>` 的 src 都是绝对 URL（http/https 开头）
 □ 没有 Logo/Banner/二维码等噪音图片
 □ 没有"上一页/下一页/当前位置/Copyright/ICP备"等噪音文字
+□ 没有联系方式信息（电话/传真/邮箱/网址/微信/QQ/地址，与博宇清洗规则一致）
 □ 没有输出 Markdown、解释、工具调用记录
 □ 输出为纯 JSON，content_html 是合法 HTML 字符串
