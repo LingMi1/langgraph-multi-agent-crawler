@@ -105,18 +105,35 @@ def _is_list_page(html: str, text_content: str) -> tuple[bool, float, str]:
         # 清洗后文本太短，用原始 HTML body 文本长度兜底
         body_text = soup.find("body")
         text_len = len(body_text.get_text(" ", strip=True)) if body_text else text_len
-    total_links = len(soup.find_all("a", href=True))
 
-    # 计算内部链接数量
+    # ★ 只统计「正文区」链接数：详情页模板的顶部导航 + 页脚 + 侧栏有大量链接
+    #   （企业站常有 40~80 个），直接除以全文长度会让链接密度虚高，
+    #   把详情页误判成列表页（从而跳过 LLM 正文定位）。排除导航容器后再算密度。
+    _NAV_AREA_CLS = re.compile(
+        r'(header|footer|nav|menu|topbar|top-bar|top_bar|breadcrumb|pagination|'
+        r'aside|sidebar|head|foot|toolbar|tool-bar|service|float|bottom|'
+        r'copyright|friendlink|link-box|links\b)', re.I
+    )
     internal_links = 0
     for a in soup.find_all("a", href=True):
         href = a.get("href", "")
+        # 跳过位于头部/页脚/导航/侧栏容器内的链接（正邦等模板导航是 <div class="h_nav">，
+        # 标签类型不定，需遍历全部祖先并检查 class/id）
+        in_nav_area = False
+        for p in a.find_parents():
+            cls = " ".join(p.get("class") or [])
+            cid = p.get("id") or ""
+            if _NAV_AREA_CLS.search(cls) or _NAV_AREA_CLS.search(cid):
+                in_nav_area = True
+                break
+        if in_nav_area:
+            continue
         if href and not href.startswith(("http://", "https://", "//")):
             internal_links += 1
         elif href and not href.startswith(("javascript:", "mailto:", "tel:", "#")):
             internal_links += 1
 
-    # 链接密度 = 链接数 / 文本字符数
+    # 链接密度 = 正文区链接数 / 文本字符数
     link_density = internal_links / max(text_len, 1)
 
     # 判定规则
@@ -361,25 +378,65 @@ def _bs4_remove_header_footer(soup: BeautifulSoup, page_url: str = "") -> None:
                 el.decompose()
 
     # ====================================================================
-    # Step 2: 删除底部全站共用装饰图（备案图标/国旗切换/二维码/Logo遗留）
-    # 安全阀: 仅删除 template/default/images/ 路径和外部备案图标
+    # Step 2: 删除全站装饰图（备案图标/国旗切换/二维码/Logo 遗留）
+    # 三层过滤（清洗效果优先，命中即删，宁可误删不留残留）：
+    #   ① 文件名/路径正则：二维码/备案/国旗等关键词无条件删（正文区也不留）
+    #   ② 框架区位置：导航/页脚/侧栏/版权/面包屑容器内的 img 全删
+    #   ③ 父容器语义：img 父容器 class/id 命中二维码/装饰语义 → 删
+    # 正文区数据图标（如 icon1.jpg）不含关键词且不在框架区 → 自然保留。
     # ====================================================================
-    _FOOTER_DECO_IMG_SUFFIXES = [
-        "szicbok.gif",   # 苏州工商备案图标
-        "cn.gif",        # 中文国旗
-        "en.gif",        # 英文国旗
-        "tubiao.png",    # 营销二维码图标
-    ]
-    # 确保非 None
-    _safe_suffixes = [s for s in _FOOTER_DECO_IMG_SUFFIXES if s is not None]
-    if _safe_suffixes:
-        for img in soup.find_all("img"):
-            src = (img.get("src") or "").lower()
-            if any(src.endswith(s) for s in _safe_suffixes):
-                alt = (img.get("alt") or "")[:20]
-                agent_logger.debug(
-                    f"[Heuristic] Step2: 删除装饰图 '{alt}' src={src[-30:]}"
-                )
+    _DECO_IMG_FILENAME_RE = re.compile(
+        r"(?i)(szicbok\.gif|^cn\.gif$|^en\.gif$|tubiao\.png|template/default/images/"
+        r"|erweima|qrcode|qr[_-]?code|wx[_-]?code|contentwx|weixin|wechat|saoyisao|sao[_-]?yi[_-]?sao)"
+    )
+    # 框架区容器特征（导航/页脚/侧栏/版权/面包屑/轮播/分页等）
+    _FRAME_ZONE_CLS_RE = re.compile(
+        r"(?i)(^(nav|header|footer|top|bottom|menu|sidebar|side|breadcrumb|crumb|copyright|"
+        r"foot|head|toolbar|fixednav|topnav|bottomnav|slide|carousel|swiper|pagination|"
+        r"page[_-]?list|subnav|icon[_-]?list|share|sns|hot|recommend|related|rank|search)$)"
+    )
+    _FRAME_ZONE_KW = (
+        "nav", "footer", "header", "breadcrumb", "crumb", "copyright", "sidebar",
+        "menu", "topbar", "toolbar", "bottom", "fixednav", "版权", "页脚", "导航",
+        "面包屑", "侧栏", "侧边",
+    )
+    for img in list(soup.find_all("img")):
+        src = (img.get("src") or "") or ""
+        alt = (img.get("alt") or "") or ""
+        # ① 文件名/路径正则 → 无条件删（含正文区二维码，如 contentwx.png）
+        if _DECO_IMG_FILENAME_RE.search(src) or _DECO_IMG_FILENAME_RE.search(alt):
+            agent_logger.debug(f"[Heuristic] Step2-①: 删除二维码/装饰图 alt={alt[:20]} src={src[-40:]}")
+            img.decompose()
+            continue
+        # ② 框架区位置 → 祖先容器命中框架特征即删
+        in_frame = False
+        for p in img.parents:
+            if not hasattr(p, "get"):
+                continue
+            if getattr(p, "name", "") in ("nav", "header", "footer", "aside"):
+                in_frame = True
+                break
+            p_cls = " ".join(p.get("class", []) or [])
+            p_id = (p.get("id") or "") or ""
+            p_all = (p_cls + " " + p_id).lower()
+            if _FRAME_ZONE_CLS_RE.search(p_cls) or _FRAME_ZONE_CLS_RE.search(p_id):
+                in_frame = True
+                break
+            if any(kw in p_all for kw in _FRAME_ZONE_KW):
+                in_frame = True
+                break
+        if in_frame:
+            agent_logger.debug(f"[Heuristic] Step2-②: 删除框架区装饰图 src={src[-40:]}")
+            img.decompose()
+            continue
+        # ③ 父容器语义（二维码容器）
+        parent = img.parent
+        if parent and hasattr(parent, "get"):
+            p_cls = " ".join(parent.get("class", []) or [])
+            p_id = (parent.get("id") or "") or ""
+            if any(kw in (p_cls + " " + p_id).lower()
+                   for kw in ("qrcode", "erweima", "二维码", "扫码", "wechat", "weixin")):
+                agent_logger.debug(f"[Heuristic] Step2-③: 删除二维码容器图 src={src[-40:]}")
                 img.decompose()
 
     # ====================================================================
@@ -987,7 +1044,7 @@ def _collect_images(html: str) -> tuple[int, List[str], List[str]]:
                 img.get("data-url") or
                 ""
             ).strip()
-            if src:
+            if src and not src.startswith("data:"):  # 过滤 base64 内嵌图，CSV 只留外链
                 urls.append(src)
             alt = (img.get("alt") or img.get("title") or "").strip()
             alts.append(alt)

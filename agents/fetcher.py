@@ -252,6 +252,7 @@ def _fetch_with_playwright_sync(url: str, use_system_chrome: bool = False) -> Tu
                         "--disable-gpu",
                         "--disable-dev-shm-usage",
                         "--disable-blink-features=AutomationControlled",
+                        "--ignore-certificate-errors",
                     ],
                 }
                 if use_system_chrome:
@@ -471,8 +472,24 @@ class HttpxPlaywrightFetcher(FetcherRouterInterface):
                 except Exception:
                     pass
 
-                # 短 HTML → 自动降级 Playwright
+                # 短 HTML → 判断是否为 404/错误页：是则直接判死返回，不再降级 Playwright
+                #   （死链站常见大量 404，降级 Playwright 每次 3~6s 全白耗）
                 if len(html) < 500 and not profile.needs_js_render:
+                    low_html = html.lower()
+                    is_error_page = (
+                        resp.status_code in (404, 410, 403)
+                        or ("404" in low_html and "not found" in low_html)
+                        or "the requested url" in low_html
+                    )
+                    if is_error_page:
+                        agent_logger.info(
+                            f"[FetcherRouter] httpx 返回 {len(html)} 字节，判定为 404/错误页"
+                            f"(HTTP {resp.status_code})，直接判死不降级 | {url[:80]}"
+                        )
+                        _parsed = urlparse(url)
+                        _base = f"{_parsed.scheme}://{_parsed.netloc}"
+                        self._memory.mark_visited(url, base_url=_base)
+                        return await self._html_to_pagedata(url, html, "httpx")
                     agent_logger.info(f"[FetcherRouter] httpx 返回 {len(html)} 字节（过短），降级 Playwright | {url[:80]}")
                     return await self._fetch_playwright(url)
 
