@@ -1,0 +1,502 @@
+import re
+import json
+import html as html_lib
+from typing import Any
+from datetime import datetime
+
+
+async def main(args: Args) -> Output:
+    params = args.params
+
+    try:
+        raw_input = params.get("input", "")
+        input_gsmc = clean_text(params.get("gsmc", ""))
+        input_zdr = clean_text(params.get("zdr", ""))
+
+        data = parse_json_deep(raw_input)
+        if isinstance(data, list):
+            data = first_dict(data)
+
+        if not isinstance(data, dict):
+            error_html = render_error_page(
+                "输入解析失败，未得到有效JSON对象",
+                f"原始输入预览：{clean_text(raw_input)[:500]}"
+            )
+            return {
+                "key0": {
+                    "gsmc": input_gsmc, "index": "", "ywlx1": "", "ywlx2": "", "ywlx3": "", "ywlx4": "",
+                    "riqi": "", "title": "解析失败", "url": "", "html": error_html,
+                    "zdr": input_zdr, "timestamp": current_timestamp(), "download_link": ""
+                }
+            }
+
+        gsmc = clean_text(data.get("gsmc", "")) or input_gsmc
+        index = clean_text(data.get("index", ""))
+        ywlx1 = clean_text(data.get("ywlx1", ""))
+        ywlx2 = clean_text(data.get("ywlx2", ""))
+        ywlx3 = clean_text(data.get("ywlx3", ""))
+        ywlx4 = clean_text(data.get("ywlx4", ""))
+
+        riqi = clean_text(data.get("riqi", ""))
+        title = clean_text(data.get("title", ""))
+        url = clean_url(data.get("url", ""))
+
+        zdr = clean_text(data.get("zdr", "")) or input_zdr
+        timestamp = clean_text(data.get("timestamp", "")) or current_timestamp()
+        download_link = clean_text(data.get("download_link", ""))
+
+        source = clean_text(data.get("source", ""))
+        author = clean_text(data.get("author", ""))
+        views = clean_text(data.get("views", ""))
+
+        content_html = normalize_html_output(data.get("content_html", ""))
+        # 1. 移除正文中与顶部渲染重复的标题和发布时间
+        content_html = deduplicate_content_header(content_html, title, riqi)
+        # 2. 【新增】清理正文多余的闭合标签，防止破坏外层容器结构
+        content_html = fix_html_tag_balance(content_html)
+
+        rendered_html = render_full_html(
+            title=title,
+            riqi=riqi,
+            source=source,
+            author=author,
+            views=views,
+            content_html=content_html
+        )
+
+        return {
+            "key0": {
+                "gsmc": gsmc,
+                "index": index,
+                "ywlx1": ywlx1, "ywlx2": ywlx2, "ywlx3": ywlx3, "ywlx4": ywlx4,
+                "riqi": riqi, "title": title, "url": url,
+                "html": rendered_html,
+                "zdr": zdr, "timestamp": timestamp, "download_link": download_link
+            }
+        }
+
+    except Exception as e:
+        error_html = render_error_page(
+            f"渲染代码执行异常：{str(e)}",
+            "请检查输入格式和代码逻辑"
+        )
+        return {
+            "key0": {
+                "gsmc": "", "index": "", "ywlx1": "", "ywlx2": "", "ywlx3": "", "ywlx4": "",
+                "riqi": "", "title": "渲染异常", "url": "",
+                "html": error_html,
+                "zdr": "", "timestamp": current_timestamp(), "download_link": ""
+            }
+        }
+
+def render_error_page(title: str, detail: str) -> str:
+    """渲染错误提示页面"""
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>渲染异常</title>
+<style>
+body {{ font-family: "Microsoft YaHei", "PingFang SC", sans-serif; padding: 40px; background: #f5f7fa; }}
+.error-box {{ max-width: 800px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 8px; border: 1px solid #ffcccc; box-shadow: 0 2px 12px rgba(0,0,0,0.05); }}
+.error-title {{ color: #c00; font-size: 20px; margin-bottom: 20px; }}
+.error-detail {{ color: #666; line-height: 1.8; word-break: break-all; white-space: pre-wrap; }}
+</style>
+</head>
+<body>
+<div class="error-box">
+<div class="error-title">{html_lib.escape(title)}</div>
+<div class="error-detail">{html_lib.escape(detail)}</div>
+</div>
+</body>
+</html>"""
+
+
+def render_full_html(
+    title: str,
+    riqi: str,
+    source: str,
+    author: str,
+    views: str,
+    content_html: str
+) -> str:
+    """把大模型输出的清洗后 HTML 片段包装为完整文档
+    外层使用 article 标签，避免正文多余 </div> 破坏容器结构
+    """
+    page_title = title or "网页正文"
+
+    css = """
+<style>
+* {
+    box-sizing: border-box;
+}
+body {
+    margin: 0;
+    padding: 0;
+    background: #f5f7fa;
+    font-family: "Microsoft YaHei", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+    color: #333;
+    -webkit-font-smoothing: antialiased;
+}
+/* 外层卡片改用 article，避免被正文 </div> 提前闭合 */
+.render-page {
+    max-width: 900px;
+    margin: 24px auto;
+    padding: 48px 56px;
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 2px 16px rgba(0, 0, 0, 0.06);
+    display: block;
+}
+.render-title {
+    text-align: center;
+    font-size: 28px;
+    font-weight: 600;
+    color: #1a1a1a;
+    margin: 0 0 24px 0;
+    line-height: 1.5;
+}
+.render-meta {
+    text-align: center;
+    color: #909399;
+    font-size: 13px;
+    margin-bottom: 36px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid #f0f2f5;
+}
+.render-body {
+    font-size: 16px;
+    line-height: 1.9;
+    color: #2c2c2c;
+}
+/* 正文段落兜底：首行缩进+段间距 */
+.render-body p {
+    margin: 0 0 18px 0;
+    text-indent: 2em;
+    text-align: justify;
+}
+/* 兜底：无p标签包裹的纯文本也保持正确间距 */
+.render-body {
+    word-wrap: break-word;
+}
+/* 兜底：图片不溢出 + 居中 + 圆角 */
+.render-body img {
+    max-width: 100% !important;
+    height: auto !important;
+    display: block;
+    margin: 22px auto;
+    border-radius: 6px;
+}
+/* 表格兜底 */
+.render-body table {
+    max-width: 100%;
+    border-collapse: collapse;
+    margin: 20px 0;
+}
+.render-body table th,
+.render-body table td {
+    border: 1px solid #e4e7ed;
+    padding: 10px 14px;
+}
+.render-body video {
+    max-width: 100%;
+    display: block;
+    margin: 20px auto;
+    border-radius: 6px;
+}
+/* 列表兜底 */
+.render-body ul,
+.render-body ol {
+    margin: 16px 0;
+    padding-left: 2em;
+}
+.render-body li {
+    margin: 8px 0;
+}
+.empty-tip {
+    text-align: center;
+    color: #909399;
+    padding: 60px 20px;
+    border: 1px dashed #dcdfe6;
+    margin: 20px 0;
+    border-radius: 6px;
+    background: #fafafa;
+}
+</style>
+""".strip()
+
+    # 外层容器使用 article 标签，避免正文 </div> 破坏结构
+    body_parts = ['<article class="render-page">']
+
+    if title:
+        body_parts.append(f'<h1 class="render-title">{escape_html(title)}</h1>')
+
+    meta_items = []
+    if riqi:
+        meta_items.append(f"发布时间：{escape_html(riqi)}")
+    if source:
+        meta_items.append(f"来源：{escape_html(source)}")
+    if author:
+        meta_items.append(f"作者：{escape_html(author)}")
+    if views:
+        meta_items.append(f"浏览量：{escape_html(views)}")
+    if meta_items:
+        body_parts.append(f'<div class="render-meta">{"　".join(meta_items)}</div>')
+
+    body_parts.append('<div class="render-body">')
+    if content_html:
+        body_parts.append(content_html)
+    else:
+        body_parts.append(
+            '<div class="empty-tip">未提取到有效正文内容<br>'
+            '请检查上游大模型是否输出了 content_html 字段</div>'
+        )
+    body_parts.append('</div>')
+
+    body_parts.append('</article>')
+
+    full_html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{escape_html(page_title)}</title>
+{css}
+</head>
+<body>
+{chr(10).join(body_parts)}
+</body>
+</html>"""
+
+    return normalize_html_output(full_html)
+
+
+# ============ 工具函数 ============
+
+def normalize_text(text: str) -> str:
+    """文本归一化：去除空白、标点、全角符号，用于内容一致性比对"""
+    if not text:
+        return ""
+    text = re.sub(r'\s+', '', text)
+    text = re.sub(r'[，。、：:；;""''（）()【】\[\]《》\-—·. ]', '', text)
+    return text.strip()
+
+
+def deduplicate_content_header(content_html: str, target_title: str, target_date: str) -> str:
+    """
+    以顶部渲染的标题、日期为基准，移除正文里重复的头部内容
+    渲染内容优先级最高，正文匹配一致的元素自动删除
+    """
+    if not content_html:
+        return ""
+    
+    html = content_html
+    norm_title = normalize_text(target_title)
+    norm_date = normalize_text(target_date)
+
+    # 1. 移除正文里与渲染标题重复的 h1~h3 标题标签
+    def replace_title(match):
+        tag_content = match.group(0)
+        inner_text = re.sub(r'<[^>]+>', '', tag_content)
+        if normalize_text(inner_text) == norm_title:
+            return ""
+        return tag_content
+
+    html = re.sub(
+        r'<h[1-3]\b[^>]*>.*?</h[1-3]>',
+        replace_title,
+        html,
+        flags=re.IGNORECASE | re.DOTALL
+    )
+
+    # 2. 移除正文里包含「发布时间/日期」字样、且内含目标日期的元信息块
+    def replace_date_block(match):
+        tag_content = match.group(0)
+        inner_text = re.sub(r'<[^>]+>', '', tag_content)
+        norm_inner = normalize_text(inner_text)
+        if norm_date and norm_date in norm_inner:
+            return ""
+        return tag_content
+
+    html = re.sub(
+        r'<(p|div|span)\b[^>]*>.*?(发布时间|发布日期|日期).*?</\1>',
+        replace_date_block,
+        html,
+        flags=re.IGNORECASE | re.DOTALL
+    )
+
+        # 3. 移除所有纯日期单独段落（无前缀文字，仅日期内容）
+    # 注意：当 norm_date 为空时不执行，否则会误删 <p><img.../></p> 等无文本内容的标签
+    if norm_date:
+        def replace_pure_date(match):
+            tag_content = match.group(0)
+            inner_text = re.sub(r'<[^>]+>', '', tag_content).strip()
+            if normalize_text(inner_text) == norm_date:
+                return ""
+            return tag_content
+
+        html = re.sub(
+            r'<(p|div|span)\b[^>]*>.*?</\1>',
+            replace_pure_date,
+            html,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+
+
+    # 4. 清理清洗后产生的多余空行与空段落
+    html = re.sub(r'<(p|div)\b[^>]*>\s*</\1>', '', html, flags=re.IGNORECASE)
+    html = re.sub(r'\n\s*\n\s*\n+', '\n\n', html)
+
+    return html.strip()
+
+
+def fix_html_tag_balance(html: str) -> str:
+    """修复正文HTML中div标签不匹配的问题，移除多余的闭合div
+    避免正文里的 </div> 提前闭合外层渲染容器
+    """
+    if not html:
+        return ""
+    
+    # 统计开标签和闭标签数量
+    open_divs = len(re.findall(r'<div\b[^>]*>', html, flags=re.IGNORECASE))
+    close_divs = len(re.findall(r'</div>', html, flags=re.IGNORECASE))
+    
+    # 闭合标签多于开标签时，移除多余的闭合标签
+    if close_divs > open_divs:
+        extra_count = close_divs - open_divs
+        
+        def remove_extra(match):
+            nonlocal extra_count
+            if extra_count > 0:
+                extra_count -= 1
+                return ""
+            return match.group(0)
+        
+        html = re.sub(r'</div>', remove_extra, html, flags=re.IGNORECASE)
+    
+    return html.strip()
+
+
+def first_dict(items: list) -> Any:
+    for item in items:
+        parsed = parse_json_deep(item)
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def parse_json_deep(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (dict, list)):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    text = remove_markdown_code_fence(text)
+    current = text
+    for _ in range(5):
+        if isinstance(current, (dict, list)):
+            return current
+        if not isinstance(current, str):
+            return current
+        current = current.strip()
+        try:
+            current = json.loads(current)
+            continue
+        except Exception:
+            pass
+        try:
+            json_text = extract_json_array_or_object(current)
+            if json_text:
+                current = json.loads(json_text)
+                continue
+        except Exception:
+            pass
+        break
+    return current
+
+
+def remove_markdown_code_fence(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    return text.strip()
+
+
+def extract_json_array_or_object(text: str) -> str:
+    text = text.strip()
+    array_start = text.find("[")
+    array_end = text.rfind("]")
+    object_start = text.find("{")
+    object_end = text.rfind("}")
+    if array_start != -1 and array_end != -1 and array_end > array_start:
+        return text[array_start:array_end + 1]
+    if object_start != -1 and object_end != -1 and object_end > object_start:
+        return text[object_start:object_end + 1]
+    return ""
+
+
+def clean_text(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value)
+    text = text.replace("\\r\\n", "\n")
+    text = text.replace("\\n", "\n")
+    text = text.replace("\\t", " ")
+    text = text.replace('\\"', '"')
+    text = text.replace("\\'", "'")
+    text = text.strip().strip('"').strip("'")
+    if text.lower() == "null":
+        return ""
+    if re.fullmatch(r"[\s\\n\\r]+", text):
+        return ""
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def clean_url(value: Any) -> str:
+    if value is None:
+        return ""
+    url = str(value).strip()
+    url = url.replace("\\r\\n", "")
+    url = url.replace("\\n", "")
+    url = url.replace("\\t", "")
+    url = url.replace('\\"', "")
+    url = url.replace("\\'", "")
+    url = url.replace('"', "")
+    url = url.replace("'", "")
+    url = url.replace("http: //", "http://")
+    url = url.replace("https: //", "https://")
+    url = re.sub(r"\s+", "", url)
+    return url
+
+
+def normalize_html_output(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value)
+    text = text.replace("\\r\\n", "\n")
+    text = text.replace("\\n", "\n")
+    text = text.replace("\\t", "    ")
+    text = text.replace('\\"', '"')
+    text = text.replace("\\'", "'")
+    text = text.strip()
+    if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+        text = text[1:-1]
+    return text.strip()
+
+
+def escape_html(value: Any) -> str:
+    return html_lib.escape(clean_text(value), quote=False)
+
+
+def escape_attr(value: Any) -> str:
+    return html_lib.escape(clean_text(value), quote=True)
+
+
+def current_timestamp() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
