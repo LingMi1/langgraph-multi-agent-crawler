@@ -463,7 +463,7 @@ def run_langgraph_crawler(target_url: str,
 
     Args:
         target_url:    目标网站首页 URL
-        concurrency:   保留参数（LangGraph 内部串行处理 queue）
+        concurrency:   fetch_extract 节点每批并发处理的 URL 数（默认 5）
         log_callback:  日志回调
         reset_memory:  是否重置该站点的 SQLite 记忆
         progress_callback: 进度回调 (fetched, queue_len, url, phase)
@@ -506,6 +506,7 @@ def run_langgraph_crawler(target_url: str,
                 seed_url=target_url,
                 log_callback=log,
                 progress_callback=progress_callback,
+                concurrency=concurrency,
             )
         )
         saved = stats.get("saved", 0)

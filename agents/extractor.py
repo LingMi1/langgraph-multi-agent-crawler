@@ -31,6 +31,20 @@ from schemas import agent_logger
 import config
 
 
+# ★ LLM 深降级并发限流（懒加载）：与 nodes.py 的 _classify_nav_path_llm /
+#   _llm_locate_content_selector 共用同一内网 DeepSeek 端点，
+#   fetch_extract 并发提升后深降级也不能同时打爆端点。
+_LLM_DEGRADE_MAX = 2
+_LLM_DEGRADE_SEM: Optional[asyncio.Semaphore] = None
+
+
+def _get_llm_degrade_semaphore() -> asyncio.Semaphore:
+    global _LLM_DEGRADE_SEM
+    if _LLM_DEGRADE_SEM is None:
+        _LLM_DEGRADE_SEM = asyncio.Semaphore(_LLM_DEGRADE_MAX)
+    return _LLM_DEGRADE_SEM
+
+
 # ============================================================================
 # trafilatura 集成（懒加载，允许模块未安装时降级）
 # ============================================================================
@@ -957,9 +971,12 @@ class TrafilaturaExtractor(ExtractorAgentInterface):
                     f"(raw_text={raw_text_len}, extracted={text_len_bs4}) | {url[:60]}"
                 )
                 try:
-                    llm_text = await loop.run_in_executor(
-                        None, _extract_with_llm, html, url
-                    )
+                    # ★ 并发限流：LLM 深降级每页十几秒，多个详情页并发触发时
+                    #   用信号量钳制在 _LLM_DEGRADE_MAX，防内网 DeepSeek 被打爆
+                    async with _get_llm_degrade_semaphore():
+                        llm_text = await loop.run_in_executor(
+                            None, _extract_with_llm, html, url
+                        )
                     final_html = f"<div>{llm_text}</div>"
                     final_confidence = 0.5
                     method = "llm"

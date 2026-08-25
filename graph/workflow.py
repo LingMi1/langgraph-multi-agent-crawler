@@ -151,6 +151,7 @@ async def run_crawler(
     log_callback: Optional[Callable[[str], None]] = None,
     max_steps: int = 20000,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    concurrency: int = 3,
 ) -> dict:
     """
     运行 LangGraph 爬虫工作流。
@@ -164,7 +165,7 @@ async def run_crawler(
                       （仍设上限以防死循环）
         progress_callback: 进度回调 (fetched, queue_len, url, phase)，
                           phase ∈ {"fetch","media","storage"}，每处理一页调用一次
-
+        concurrency:  fetch_extract 节点每批并发处理的 URL 数（BFS 批次内 asyncio.gather 并发）
     Returns:
         最终状态中的 stats 字典
     """
@@ -174,12 +175,13 @@ async def run_crawler(
         else:
             print(msg)
 
-    log(f"启动 LangGraph 多 Agent 爬虫 | 目标: {seed_url} | max_steps={max_steps}")
+    log(f"启动 LangGraph 多 Agent 爬虫 | 目标: {seed_url} | max_steps={max_steps} | concurrency={concurrency}")
 
     app = get_crawler_app()
     initial_state: CrawlerState = {
         "seed_url": seed_url,
         "progress_callback": progress_callback,
+        "concurrency": max(1, int(concurrency or 1)),
     }
 
     try:

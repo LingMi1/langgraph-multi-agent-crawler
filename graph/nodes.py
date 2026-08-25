@@ -27,6 +27,19 @@ from .state import CrawlerState, EvaluationResult, QualityIssue, CrawlerConfig, 
 # ── 全局配置 ──
 MAX_RETRY_COUNT = 3  # 失败 URL 最大重试次数
 
+# ★ LLM 并发限流信号量（懒加载）：内网 DeepSeek 单点吞吐有限，
+#   详情页 LLM 导航分类 / 正文定位 / 深降级并发跑会打爆端点。
+#   fetch_extract 并发提升到 N 后，LLM 调用仍被钳制在 _LLM_MAX_CONCURRENCY。
+_LLM_MAX_CONCURRENCY = 2
+_LLM_SEMAPHORE: Optional[asyncio.Semaphore] = None
+
+
+def _get_llm_semaphore() -> asyncio.Semaphore:
+    global _LLM_SEMAPHORE
+    if _LLM_SEMAPHORE is None:
+        _LLM_SEMAPHORE = asyncio.Semaphore(_LLM_MAX_CONCURRENCY)
+    return _LLM_SEMAPHORE
+
 # 复用现有 Agent 模块
 from agents.scout import PageScout
 from agents.nav import NavigationParser
@@ -1033,16 +1046,16 @@ async def navigate_node(state: CrawlerState) -> dict:
 
 async def fetch_extract_node(state: CrawlerState) -> dict:
     """
-    抓取+清洗节点 — 这是整个流程的核心执行者。
+    抓取+清洗节点 — 整个流程的核心执行者。
 
-    每次调用处理 queue 中的第一个 URL:
-      1. 出队一个 URL
-      2. FetcherRouter 抓取页面
-      3. 判断列表页/详情页:
+    每次调用处理 queue 中的前 N 个 URL（N = state["concurrency"]）：
+      1. 出队一批 URL，asyncio.gather 并发抓取+清洗
+      2. 每个 URL 独立判断列表页/详情页:
          - 列表页 (depth < 4): 提取 body 链接 → 追加到 queue
          - 详情页: ExtractorAgent 清洗 → 生成 CSV 行 → 追加到 crawled_results
          - 列表页 (depth >= 4): 丢弃
-      4. MD5 内容去重
+      3. MD5 内容去重
+      4. 共享状态容器（queue/stats/seen_*）由各子任务就地更新，主函数聚合返回
     """
     queue: List[Dict] = list(state.get("queue", []))
     profile_dict = state.get("site_profile", {})
@@ -1060,6 +1073,10 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
     nav_names: List[str] = [str(n) for n in nav_mapping.keys() if str(n).strip()]
     # ★ 已内嵌图片的页面 URL（media 阶段处理过），其 HTML 不应再被 re-enqueue 覆盖
     media_processed_keys: set = {_url_key(u) for u in (state.get("media_processed_urls", []) or []) if u}
+    # ★ 并发度：main.py → workflow.run_crawler → state 透传
+    concurrency = int(state.get("concurrency") or 3)
+    if concurrency < 1:
+        concurrency = 1
 
     if not queue:
         return {"error": "queue 为空，无需处理"}
@@ -1068,8 +1085,68 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
     if not profile:
         return {"error": "site_profile 缺失"}
 
-    # ── 出队 ──
-    item = queue.pop(0)
+    # ── 并发批处理：出队 BATCH 个 URL，asyncio.gather 并行抓取+清洗 ──
+    # 共享状态容器由各子任务就地修改（asyncio 单线程协作式，无 await 间隙的
+    # list/dict 操作天然原子），主函数仅聚合各子任务新增的 crawled_results。
+    blocked_urls: Dict[str, str] = dict(state.get("anti_crawl_blocked_urls", {}))
+    batch = [queue.pop(0) for _ in range(min(concurrency, len(queue)))]
+    gathered = await asyncio.gather(
+        *[
+            _process_one_url(
+                item, queue, stats, seen_keys, seen_hashes, retry_map, blocked_urls,
+                profile, config_dict, output_dir, site_name, seed_url,
+                extraction_rules, nav_mapping, nav_names, media_processed_keys,
+                state.get("progress_callback"),
+            )
+            for item in batch
+        ],
+        return_exceptions=True,
+    )
+    crawled_results: List[Dict] = []
+    for r in gathered:
+        if isinstance(r, BaseException):
+            agent_logger.warning(
+                f"[Graph::fetch_extract] 并发子任务异常: {type(r).__name__}: {r}"
+            )
+        elif r:
+            crawled_results.extend(r)
+
+    return {
+        "queue": queue,
+        "stats": stats,
+        "seen_url_keys": seen_keys,
+        "seen_hashes": seen_hashes,
+        "url_retry_count": retry_map,
+        "anti_crawl_blocked_urls": blocked_urls,
+        "crawled_results": crawled_results,
+    }
+
+
+async def _process_one_url(
+    item: Dict,
+    queue: List[Dict],
+    stats: Dict[str, int],
+    seen_keys: List[str],
+    seen_hashes: List[str],
+    retry_map: Dict[str, int],
+    blocked_urls: Dict[str, str],
+    profile: Optional[SiteProfile],
+    config_dict: Dict[str, Any],
+    output_dir: str,
+    site_name: str,
+    seed_url: str,
+    extraction_rules: Any,
+    nav_mapping: Dict[str, str],
+    nav_names: List[str],
+    media_processed_keys: set,
+    progress_callback: Optional[Any],
+) -> List[Dict]:
+    """
+    单 URL 抓取+清洗（fetch_extract_node 的并发子任务）。
+
+    共享可变状态（queue/stats/seen_*/retry/blocked）由调用方传入并就地更新；
+    返回值仅为该 URL 新增的 crawled_results 行（无则空列表）。
+    """
     url = item["url"]
     depth = item.get("depth", 1)
     nav_path = item.get("nav_path", [])
@@ -1087,7 +1164,7 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
         stats["fetched"] = stats.get("fetched", 0) + 1
 
         # ★ 进度回调：每处理一页上报 (已处理页数, 队列剩余, 当前URL)，供 GUI 进度条使用
-        pcb = state.get("progress_callback")
+        pcb = progress_callback
         if pcb:
             try:
                 pcb(stats["fetched"], len(queue), url, "fetch")
@@ -1108,8 +1185,7 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
         else:
             retry_map[key] = retries
             agent_logger.info(f"[Graph::fetch_extract] 已达最大重试 ({MAX_RETRY_COUNT})，放弃 | {url[:60]}")
-        return {"queue": queue, "stats": stats, "seen_url_keys": seen_keys,
-                "url_retry_count": retry_map}
+        return []
 
     if not page.html or len(page.html) < 100:
         stats["failed"] = stats.get("failed", 0) + 1
@@ -1124,8 +1200,7 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
             agent_logger.info(f"[Graph::fetch_extract] 重试 {retries}/{MAX_RETRY_COUNT} | {url[:60]}")
         else:
             retry_map[key] = retries
-        return {"queue": queue, "stats": stats, "seen_url_keys": seen_keys,
-                "url_retry_count": retry_map}
+        return []
 
     # ── 反爬拦截检测：命中则直接丢弃，不重试 ──
     blocked, block_reason = _detect_anti_crawl_block(
@@ -1138,13 +1213,8 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
             f"[Graph::fetch_extract] 反爬拦截: 高级反爬爬不了 | {url[:80]}"
         )
         stats["failed"] = stats.get("failed", 0) + 1
-        blocked_urls = dict(state.get("anti_crawl_blocked_urls", {}))
         blocked_urls[_url_key(url)] = block_reason
-        return {
-            "queue": queue, "stats": stats, "seen_url_keys": seen_keys,
-            "url_retry_count": retry_map,
-            "anti_crawl_blocked_urls": blocked_urls,
-        }
+        return []
 
     # ── 图片抢救：修复路径/懒加载/CSS背景图/防盗链（必须在清洗之前执行） ──
     loop = asyncio.get_running_loop()
@@ -1154,7 +1224,7 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
     if _looks_like_404(raw_html):
         stats["skipped"] = stats.get("skipped", 0) + 1
         agent_logger.info(f"[Graph::fetch_extract] 404 页面丢弃 | {url[:80]}")
-        return {"queue": queue, "stats": stats, "seen_url_keys": seen_keys}
+        return []
     rescued, img_stats = await loop.run_in_executor(None, _rescue_images, page.html, url)
     rescued_html = rescued  # 保存抢救后的原始 HTML（后续图片合并用）
     page.html = rescued
@@ -1180,15 +1250,17 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
             _reg_nav = _lookup_url_nav(url)
             if _reg_nav and (not nav_path or _reg_nav[0] != nav_path[0] or len(_reg_nav) >= len(nav_path)):
                 # ② URL注册表：BFS 无值 / 顶级冲突（吸附修复） / 注册表更深时采用。
-                #   ★ 修复点：原条件 `len(_reg_nav) >= 2 or not nav_path` 会忽略单级注册表命中，
-                #     导致"关于正邦"页里发现的顶级栏目"发展历程"继承 [关于正邦] 链式塌缩。
-                #     现在只要顶级冲突（reg[0] != nav_path[0]）就吸附回注册表真实栏目。
+                #   ★ 防兄弟串链：仅当注册表链是 BFS 链的合法扩展（BFS 是注册表链的前缀）时
+                #     补全 BFS 更深层级；交叉冲突（如 BFS=[关于正邦,发展历程] vs
+                #     reg=[关于正邦,领导关怀]，兄弟互相继承）以注册表为准并丢弃 BFS 串链。
                 _merged = list(_reg_nav)
-                if _reg_nav[0] == nav_path[0]:
-                    # 顶级一致 → 追加 BFS 传递的更浅层级补全（不冲突才补）
-                    for _p in nav_path:
-                        if _p and _p != "网站地图" and _p not in _merged:
-                            _merged.append(_p)
+                if nav_path and _reg_nav[0] == nav_path[0]:
+                    if nav_path[:len(_reg_nav)] == _reg_nav:
+                        # 注册表链是 BFS 链的前缀 → 补全 BFS 更深层级（合法扩展）
+                        for _p in nav_path[len(_reg_nav):]:
+                            if _p and _p != "网站地图" and _p not in _merged:
+                                _merged.append(_p)
+                    # else: 交叉冲突（兄弟串链）→ 保持注册表链，丢弃 BFS 多余部分
                 if _merged != nav_path:
                     _resolved_nav, _resolve_reason = _merged, "registry"
             elif _bc_nav and not _is_likely_page_title(_bc_nav[0]):
@@ -1239,7 +1311,7 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
     if is_list and depth >= 4:
         # 超深列表页 → 丢弃
         stats["skipped"] = stats.get("skipped", 0) + 1
-        return {"queue": queue, "stats": stats, "seen_url_keys": seen_keys}
+        return []
 
     if is_list and depth < 4:
         # ★ 列表页层级登记：列表页自身是 URL 层级的一环。
@@ -1247,10 +1319,25 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
         #   2) 把自己的中文栏目名（标题清洗）追加到父级之后 → 形成完整层级
         #   3) 以「自身 URL 前缀 → 完整层级」登记进注册表，供后续详情页/更深列表页继承
         #   （先于子链接入队执行，子链接继承补全后的 nav_path）
-        _reg_base = _lookup_url_nav(url)
-        _base_nav = _reg_base if len(_reg_base) >= len(nav_path) else nav_path
+        # ★ 列表页父级锚定：以「当前 URL 父目录前缀」在注册表的真实层级为父级
+        #   （URL 结构是权威锚点）。背景：兄弟栏目（/about/fzlc、/about/ldgh… 同为
+        #   /about 的子栏目）被 BFS 从彼此侧栏继承 nav_path，若用 BFS 链当父级会把
+        #   兄弟标题混入父链（发展历程→领导关怀→总裁风采 单链塌缩 119 行）。
+        #   URL 父目录锚点：ldgh 的父目录 /about → [关于正邦]，追加自身标题 →
+        #   [关于正邦,领导关怀]；BFS 链仅在注册表无父级条目时兜底。
+        _reg_parent = _lookup_url_nav(_parent_url_prefix(url))
+        if _reg_parent:
+            _base_nav = list(_reg_parent)
+        else:
+            _reg_base = _lookup_url_nav(url)
+            _base_nav = _reg_base if len(_reg_base) >= len(nav_path) else nav_path
         _list_name = _clean_list_title(page.title or "")
-        if _list_name and _looks_like_category_title(_list_name) and _list_name not in _base_nav:
+        if _looks_like_category_url(url):
+            # ★ 栏目首页/栏目目录（/about、/about/index.html）：它自己就是
+            #   该栏目的首页，不追加自身标题（否则"关于正邦"栏目首页会被
+            #   登记成 [关于正邦, 集团简介]，污染 /about 前缀下兄弟栏目的父级锚定）
+            nav_path = list(_base_nav)
+        elif _list_name and _looks_like_category_title(_list_name) and _list_name not in _base_nav:
             nav_path = list(_base_nav) + [_list_name]
             agent_logger.info(
                 f"[Graph::fetch_extract] 列表页标题追加 nav_path: "
@@ -1390,7 +1477,7 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
         except Exception as e:
             agent_logger.warning(f"[Graph::fetch_extract] 清洗失败: {e}")
             stats["failed"] = stats.get("failed", 0) + 1
-            return {"queue": queue, "stats": stats, "seen_url_keys": seen_keys}
+            return []
 
     # ★ 列表页/详情页二次拦截处理：提取器返回空时，使用抢救后的原始 HTML 作为内容
     if cleaned.is_list_page_detected_at_extract and rescued_html and len(rescued_html) > 200:
@@ -1425,7 +1512,7 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
             )
         else:
             stats["skipped"] = stats.get("skipped", 0) + 1
-            return {"queue": queue, "stats": stats, "seen_url_keys": seen_keys}
+            return []
 
     # ── 构建模板 HTML（结构化 + 固定排版）──
     # ★ BFS+LLM 整合：详情页用两段式 LLM 定位正文容器（URL 形态模板缓存，同站同模板只调一次 LLM），
@@ -1457,7 +1544,7 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
             f"{'/二维码聚合页' if _is_qr_page else ''}，丢弃 | {url[:60]}"
         )
         stats["skipped"] = stats.get("skipped", 0) + 1
-        return {"queue": queue, "stats": stats, "seen_url_keys": seen_keys}
+        return []
 
     # ── 去重（基于最终结构化正文，避免短文本/空内容页被误判为重复） ──
     content_hash = _compute_md5(structured_body + "\x00" + (cleaned.title or ""))
@@ -1467,10 +1554,7 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
         # 仍然写一条跳过记录到 CSV
         csv_row = _build_skipped_csv_row(url, site_name, nav_path, cleaned.title,
                                           "duplicate", f"hash={content_hash[:8]}")
-        return {
-            "queue": queue, "stats": stats, "seen_url_keys": seen_keys,
-            "crawled_results": [csv_row],
-        }
+        return [csv_row]
 
     if content_hash:
         seen_hashes.append(content_hash)
@@ -1521,10 +1605,7 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
             f"[Graph::fetch_extract] 二维码聚合页/纯图页(text={len(qr_text)}字, imgs={qr_imgs})，"
             f"直接丢弃 | {url[:60]}"
         )
-        return {
-            "queue": queue, "stats": stats, "seen_url_keys": seen_keys,
-            "seen_hashes": seen_hashes,
-        }
+        return []
     if is_list and (is_pagination_page or not _has_substantial_content(_check_text, cleaned.html)):
         rel_path = ""
         stats["skipped_save"] = stats.get("skipped_save", 0) + 1
@@ -1556,13 +1637,7 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
             f"[Graph::fetch_extract] 仅入CSV(未落盘) | title={cleaned.title[:30]} | {url[:60]}"
         )
 
-    return {
-        "queue": queue,
-        "stats": stats,
-        "seen_url_keys": seen_keys,
-        "seen_hashes": seen_hashes,
-        "crawled_results": [csv_row],
-    }
+    return [csv_row]
 
 
 # ============================================================================
@@ -2872,11 +2947,20 @@ def _reset_url_nav_registry() -> None:
 
 
 def _url_path_prefix(url: str) -> str:
-    """提取 URL 去掉文件名后的路径前缀（注册表 key 的归一化形式）。
+    """提取 URL 路径前缀（注册表 key 的归一化形式）。
 
-    /index.php/xwjj/gsyw/xxx.html  → /index.php/xwjj/gsyw
-    /index.php/xwjj/gsyw/index.html → /index.php/xwjj/gsyw
-    /                              → /
+    - 目录/栏目首页脚本（index.html / index.php）→ 归一到所在目录：
+        /index.php/about/index.html → /index.php/about
+    - 内容页/列表页文件（.html/.shtml/.jsp…）→ 去掉扩展名保留名字段，
+      因为「文件名」本身是 URL 层级的一环：
+        /index.php/about/fzlc.html → /index.php/about/fzlc
+      ★ 若与栏目首页共享目录 key（原实现去掉文件名 → /index.php/about），
+        fzlc 登记 [关于正邦,发展历程] 会覆盖 /about 的一级条目 [关于正邦]，
+        导致 /about 下全部兄弟栏目继承错误父链 → 链式塌缩（正邦实测
+        发展历程→领导关怀→总裁风采 单链塌缩 119 行）。
+    - 无扩展名目录 → 原样保留：
+        /index.php/xwjj/gsyw → /index.php/xwjj/gsyw
+    - / → /
     """
     if not url:
         return "/"
@@ -2890,8 +2974,56 @@ def _url_path_prefix(url: str) -> str:
     path = re.sub(r"/{2,}", "/", path)
     last = path.rsplit("/", 1)[-1]
     if "." in last:
-        path = path.rsplit("/", 1)[0]
+        if last.lower() in ("index.html", "index.php"):
+            # 目录首页脚本 → 归一到所在目录
+            path = path.rsplit("/", 1)[0]
+        else:
+            # 内容页/列表页文件 → 去掉扩展名保留名字段（名字段是层级一环）
+            path = path.rsplit(".", 1)[0]
     return path.rstrip("/") or "/"
+
+
+def _parent_url_prefix(url: str) -> str:
+    """返回 URL 路径的父目录前缀（去掉最后一段），用于列表页父级锚定。
+
+    /index.php/about/fzlc.html   → /index.php/about
+    /index.php/about/ldgh/       → /index.php/about
+    /index.php/about             → /index.php
+    /                            → /
+    """
+    prefix = _url_path_prefix(url)
+    if prefix == "/" or "/" not in prefix:
+        return "/"
+    parent = prefix.rsplit("/", 1)[0]
+    return parent or "/"
+
+
+def _looks_like_category_url(url: str) -> bool:
+    """判断 URL 是否为「栏目首页/栏目目录」而非内容详情页。
+
+    /index.php/about              → 无文件后缀 → 栏目目录 ✓
+    /index.php/about/index.html   → 最后一段 index.html → 栏目首页 ✓
+    /index.php/about/fzlc.html    → 有 .html 且非 index → 交给列表页/详情页判断
+    /index.php/news/zbshow_1.html → 详情页
+
+    用于 LLM 导航分类短路：栏目首页的层级就是注册表条目（一级），
+    不需要也不应该让 LLM 加深。实测 LLM 曾把 about/index.html（关于正邦
+    栏目首页）判成 ['关于正邦','发展历程'] 并回写注册表，覆盖导航登记的
+    一级条目后，/about 下全部兄弟栏目继承错误父链 → 链式塌缩复现。
+    """
+    if not url:
+        return False
+    try:
+        path = urlparse(url).path.rstrip("/")
+    except Exception:
+        return False
+    if not path:
+        return False
+    path = re.sub(r"/{2,}", "/", path)
+    last = path.rsplit("/", 1)[-1]
+    if "." not in last:
+        return True  # 栏目目录（无文件后缀）
+    return last.lower() == "index.html"  # 栏目首页
 
 
 def _register_url_nav(url: str, nav_path: List[str]) -> None:
@@ -2910,6 +3042,29 @@ def _register_url_nav(url: str, nav_path: List[str]) -> None:
     if not clean:
         return
     prev = _URL_NAV_REGISTRY.get(prefix)
+    # ★ 父级一致性校验（防兄弟串链固化）：
+    #   新链的父部分（去掉最后一段）必须与「父目录前缀」的注册表条目一致。
+    #   若不一致（如 [关于正邦,发展历程,领导关怀] 登记到 /about/ldgh：
+    #   父目录 /about 条目是 [关于正邦]，新链父部分是 [关于正邦,发展历程]），
+    #   说明 BFS 继承链把兄弟栏目标题混进了父链 → 裁剪回「父条目 + 自身标题」。
+    #   塌缩链即使被算出来也写不进注册表，无法固化传播。
+    #   ★ 父目录是首页 catch-all 前缀（/、/index.php 等）时无权威父链，
+    #     退而求其次：以「现有同前缀条目」为父链基准（若新链凭空比现有
+    #     条目深且父部分不匹配 → 裁剪）。防御 LLM 分类回写把栏目首页
+    #     错误加深（about/index.html → [关于正邦,发展历程] 覆盖一级）。
+    parent = _parent_url_prefix(prefix)
+    _base_chain = None
+    if parent and parent != "/" and parent not in _HOMEPAGE_PREFIXES:
+        _base_chain = _URL_NAV_REGISTRY.get(parent) or _lookup_url_nav(parent)
+    if _base_chain is None and prev:
+        _base_chain = prev
+    if len(clean) > 1 and _base_chain and list(clean[:-1]) != list(_base_chain):
+        _trimmed = list(_base_chain) + [clean[-1]]
+        if _trimmed != clean:
+            agent_logger.debug(
+                f"[Graph::nav_reg] 父级一致性裁剪: {clean} → {_trimmed} | {prefix}"
+            )
+            clean = _trimmed
     if not prev or len(clean) >= len(prev):
         # 更深/等长的层级覆盖旧条目：
         #   - 更深覆盖（先一级后二级：/xwjj → [正邦动态]，再登记 [正邦动态, 公司要闻]）
@@ -2955,11 +3110,15 @@ def _snap_nav_to_registry(url: str, nav_path: List[str]) -> List[str]:
         return []
     reg = _lookup_url_nav(url)
     if reg:
-        if reg[0] != nav_path[0]:
+        if not nav_path:
+            # BFS 无值 → 直接采用注册表
+            nav_path = list(reg)
+        elif reg[0] != nav_path[0]:
             # 顶级冲突 → 以注册表为准（吸附回真实栏目）
             nav_path = list(reg)
-        elif len(reg) > len(nav_path):
-            # 顶级一致且注册表更深 → 升级补全（详情页继承列表页登记的二级/三级）
+        elif len(reg) > len(nav_path) and reg[:len(nav_path)] == nav_path:
+            # 顶级一致且注册表更深、且是 BFS 链的合法扩展 → 升级补全
+            # （详情页继承列表页登记的二级/三级；交叉串链不吸附）
             nav_path = list(reg)
     # 连续重复去重（防 "栏目/栏目" 循环自嵌套）
     deduped: List[str] = []
@@ -3007,6 +3166,14 @@ async def _classify_nav_path_llm(
     if url in _LLM_NAV_CACHE:
         return _LLM_NAV_CACHE[url]
 
+    # ★ 栏目首页/栏目目录短路：层级 = 注册表条目（一级），无需 LLM 加深。
+    #   实测 LLM 曾把 about/index.html（关于正邦栏目首页）判成
+    #   ['关于正邦','发展历程'] 并回写注册表，覆盖导航一级后导致
+    #   /about 全部兄弟栏目链式塌缩（发展历程→领导关怀→总裁风采）。
+    if _looks_like_category_url(url):
+        _reg = _lookup_url_nav(url)
+        return _reg if _reg else None
+
     sys_prompt = (
         "你是网站内容分类专家。给定一个网页的 URL、标题和当前候选导航路径，"
         "判断该网页应归属的栏目层级（1-4 级，越深越具体）。\n"
@@ -3026,7 +3193,8 @@ async def _classify_nav_path_llm(
 
     try:
         from agents.llm_pipeline import chat_json
-        data = await chat_json(sys_prompt, user_content, max_tokens=1024, retries=1)
+        async with _get_llm_semaphore():  # ★ 并发限流：防内网 DeepSeek 被并发详情页分类打爆
+            data = await chat_json(sys_prompt, user_content, max_tokens=1024, retries=1)
     except Exception as e:
         agent_logger.warning(f"[Graph::nav_classify] LLM 调用异常: {e}")
         return None
@@ -3325,7 +3493,9 @@ async def _llm_locate_content_selector(
             f"当前页面 HTML（压缩版）:\n{compressed}"
             f"{two_stage_note}"
         )
-        meta = await chat_json(prompt, user_content)
+        meta = None
+        async with _get_llm_semaphore():  # ★ 并发限流：模板定位 LLM 与导航分类共用信号量
+            meta = await chat_json(prompt, user_content)
         if not isinstance(meta, dict):
             return ""
         selector = (meta.get("content_selector") or meta.get("selector") or "").strip()

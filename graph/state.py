@@ -121,6 +121,9 @@ class CrawlerState(TypedDict, total=False):
     # ── 爬虫配置（可被 adjust_node 修改） ──
     crawler_config: Dict[str, Any]     # CrawlerConfig 序列化
 
+    # ── 并发控制（fetch_extract_node 每批并发处理的 URL 数） ──
+    concurrency: int
+
     # ── BFS 队列 ──
     queue: List[Dict[str, Any]]        # [{url, depth, nav_path}]
     seen_url_keys: List[str]           # 已处理/入队的 URL key
