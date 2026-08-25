@@ -51,6 +51,7 @@ CSV_FIELDS = [
     "ywlx1", "ywlx2", "ywlx3", "ywlx4",
     "tianextimejsj", "title", "html",
     "download_img_url", "img_title",
+    "url",
 ]
 
 
@@ -324,6 +325,7 @@ class FileSystemStorage(StorageManagerInterface):
                     "html": result.html,
                     "download_img_url": result.download_img_url,
                     "img_title": result.img_title,
+                    "url": result.url,
                 })
         except Exception as e:
             agent_logger.error(f"[StorageManager] CSV 写入失败: {e}")

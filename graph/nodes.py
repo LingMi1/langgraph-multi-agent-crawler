@@ -2528,6 +2528,8 @@ def _rebuild_csv_from_disk(output_dir: str, state: CrawlerState) -> List[Dict[st
                 "html": html_content,
                 "download_img_url": "",
                 "img_title": "",
+                # ★ 磁盘 HTML 未存 source_url，无法恢复 URL 列
+                "url": "",
             }
             results.append(row)
 
@@ -2700,6 +2702,7 @@ def _build_skipped_csv_row(url: str, site_name: str, nav_path: List[str],
         "html": f"<!-- {reason}: {detail} -->",
         "download_img_url": "",
         "img_title": "",
+        "url": url or "",
     }
 
 
@@ -3700,12 +3703,69 @@ def _clean_inline_style(el) -> None:
         del el['style']
 
 
+def _dedupe_title_from_body(structured_body: str, title: str) -> str:
+    """删除结构化正文中与模板 <h1>{title}</h1> 重复的标题块。
+
+    正邦等站点正文首块常是标题（如 <h3>关于正邦</h3>、<p>停网通知</p>），
+    与模板 header 的 h1 重复。规则（保守，避免误删正文）：
+      1. 删除文本完全等于标题的 heading（h1-h6）——几乎都是标题重复
+      2. 删除开头连续出现的纯标题块（p/div/span 且不含嵌套块/图片）
+      3. 清理分解后遗留的空容器
+    正文中与标题同文本的段落通常更长或带嵌套内容，不会被删。
+    """
+    if not structured_body or not title:
+        return structured_body
+    norm_title = re.sub(r"\s+", "", title or "").strip()
+    if not norm_title:
+        return structured_body
+    try:
+        soup = BeautifulSoup(structured_body, "html.parser")
+    except Exception:
+        return structured_body
+
+    def _norm(text: str) -> str:
+        return re.sub(r"\s+", "", text or "")
+
+    # 1. 删除文本完全等于标题的 heading
+    for tag in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
+        if _norm(tag.get_text("", strip=True)) == norm_title and not tag.find("img"):
+            tag.decompose()
+
+    # 2. 删除开头连续出现的纯标题块（遇到第一个不匹配块即停止）
+    for child in list(soup.contents):
+        if not getattr(child, "name", None):
+            continue
+        if _norm(child.get_text("", strip=True)) != norm_title:
+            break
+        if child.find("img"):
+            break
+        if child.find(["p", "div", "span"]):
+            break  # 含嵌套文本块的整块不删，避免误删容器
+        child.decompose()
+
+    # 3. 清理分解后遗留的空容器
+    changed = True
+    while changed:
+        changed = False
+        for el in list(soup.find_all(["div", "section"])):
+            if el.find("img"):
+                continue
+            if not el.get_text("", strip=True):
+                el.decompose()
+                changed = True
+
+    return str(soup)
+
+
 def _build_template_html(structured_body: str, title: str, nav_path: list,
                          source_url: str, crawl_time: str = "") -> str:
     """
     将结构化正文填入固定 CSS 模板，返回完整 HTML 文档。
     """
     # ★ 面包屑已按需求移除（nav_path 仍用于目录分类，但不再渲染到页面顶部）
+
+    # ★ 标题去重：正文首块常是标题（h3/p），与模板 h1 重复
+    structured_body = _dedupe_title_from_body(structured_body, title)
 
     # 标题
     title_html = f"<h1>{title}</h1>" if title else ""
