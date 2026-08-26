@@ -36,7 +36,10 @@ _LLM_SEMAPHORE: Optional[asyncio.Semaphore] = None
 
 def _get_llm_semaphore() -> asyncio.Semaphore:
     global _LLM_SEMAPHORE
-    if _LLM_SEMAPHORE is None:
+    loop = asyncio.get_running_loop()
+    # asyncio.Semaphore 绑定创建时的事件循环；GUI 每站 asyncio.run() 新建循环，
+    # 若复用旧循环的信号量会抛 "bound to a different event loop" → 按当前循环重建。
+    if _LLM_SEMAPHORE is None or getattr(_LLM_SEMAPHORE, "_loop", None) is not loop:
         _LLM_SEMAPHORE = asyncio.Semaphore(_LLM_MAX_CONCURRENCY)
     return _LLM_SEMAPHORE
 
@@ -3665,6 +3668,55 @@ def _compute_content_quality(structured_body: str) -> Tuple[float, List[str]]:
         return 0.5, ["unknown"]
 
 
+# ============================================================================
+# LLM 输出确定性防线（对齐博宇 llm_content_cleaner 的 _strip_echoed_prompt / _strip_markdown_links）
+# ① 回显剥离：LLM 偶发把提示词片段回显进 content_html，按标记剥离
+# ② 链接兜底：LLM 不遵守"href 改 javascript:void(0)"时，HTML 级确定性替换
+# ============================================================================
+
+# 提示词里出现的标记，若 LLM 把提示词回显出来，按这些标记剥离（与博宇 _PROMPT_MARKERS 对齐）
+_PROMPT_MARKERS = (
+    "删除规则", "保留规则", "提取规则", "输出格式",
+    "网页内容", "清洗结果", "重要：", "业务字段",
+    "标题规则", "图片处理", "链接处理", "自检",
+)
+
+
+def _strip_echoed_prompt(html: str) -> str:
+    """剥离 LLM 偶发回显的提示词片段（HTML 场景：只处理行首/尾部的纯文本行）"""
+    if not html:
+        return html
+    out = []
+    for line in html.splitlines():
+        s = line.strip()
+        # 整行是提示词标记 / 列表项时跳过（HTML 标签行以 < 开头不会命中）
+        if s.startswith(("- 删除", "- 保留", "- 删除：", "- 保留：")):
+            continue
+        if s and any(s.startswith(m) or s == m.rstrip("：") for m in _PROMPT_MARKERS):
+            continue
+        out.append(line)
+    return "\n".join(out).strip()
+
+
+_A_HREF_RE = re.compile(r"<a\b(?=[^>]*\shref=)[^>]*>", re.I)
+
+
+def _strip_anchor_hrefs(html: str) -> str:
+    """HTML 级链接兜底：把 <a href="..."> 的 href 确定性替换为 javascript:void(0);，保留其余属性与链接文字"""
+    if not html:
+        return html
+
+    def _replace(m):
+        tag = m.group(0)
+        return re.sub(
+            r'\shref\s*=\s*["\'][^"\']*["\']',
+            ' href="javascript:void(0);"',
+            tag, count=1, flags=re.I,
+        )
+
+    return _A_HREF_RE.sub(_replace, html)
+
+
 async def _llm_clean_content_html(
     rescued_html: str, page_url: str, gsmc: str, title: str
 ) -> str:
@@ -3701,6 +3753,9 @@ async def _llm_clean_content_html(
         body = (meta.get("content_html") or "").strip()
         if status != "success" or not body:
             return ""
+        # ★ 确定性防线（对齐博宇）：剥离提示词回显 + HTML 级链接兜底
+        body = _strip_echoed_prompt(body)
+        body = _strip_anchor_hrefs(body)
         return body
     except Exception as e:
         agent_logger.warning(f"[Graph::llm_clean] 整篇清洗失败，回退原正文 | {e}")
