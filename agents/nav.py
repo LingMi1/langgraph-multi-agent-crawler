@@ -26,6 +26,8 @@ from .interfaces import NavAgent as NavAgentInterface
 
 from schemas import agent_logger
 
+from agents.fetcher import _fetch_with_playwright_sync as _pw_fetch_sync
+
 
 class NavigationParser(NavAgentInterface):
     """
@@ -115,6 +117,44 @@ class NavigationParser(NavAgentInterface):
 
         # 4. 过滤: 去重、去首页、去列表页
         filtered = self._filter_links(all_links, base_url)
+
+        # ★ JS 模板站兜底（RuiQiCMS 等可视化建站）：静态 HTML 含 <rzq:xxx> 未渲染
+        #   模板占位（真实链接由前端 JS 填充）→ Playwright 渲染后重新提取合并。
+        #   hnbn666 实测：首页静态仅 3-4 链接（首页/公司简介/产品展示），渲染后
+        #   拿到 13 个（6 栏目 + 产品详情 + 新闻详情）。
+        if re.search(r'<rzq:[a-z]+\b', html, re.I):
+            try:
+                rendered, _, _err = _pw_fetch_sync(base_url)
+                if rendered and len(rendered) > len(html):
+                    rendered_soup = BeautifulSoup(rendered, "html.parser")
+                    rendered_links: List[NavLink] = []
+                    r_seen: Set[str] = set()
+                    nav_containers2 = self._find_nav_containers(rendered_soup)
+                    for container in nav_containers2:
+                        rendered_links.extend(self._extract_from_container(
+                            container, base_url, current_depth, [], r_seen
+                        ))
+                    if not rendered_links:
+                        body2 = rendered_soup.find("body")
+                        if body2:
+                            rendered_links = self._extract_from_body(body2, base_url, r_seen)
+                    rendered_filtered = self._filter_links(rendered_links, base_url)
+                    if rendered_filtered:
+                        old_keys = {self._url_key(l.url) for l in filtered}
+                        merged = list(filtered)
+                        for l in rendered_filtered:
+                            k = self._url_key(l.url)
+                            if k not in old_keys:
+                                old_keys.add(k)
+                                merged.append(l)
+                        if len(merged) > len(filtered):
+                            agent_logger.info(
+                                f"[NavAgent] rzq 模板页 Playwright 渲染补链: "
+                                f"{len(filtered)} → {len(merged)} 个"
+                            )
+                            filtered = merged
+            except Exception as _e:
+                agent_logger.warning(f"[NavAgent] rzq 渲染补链失败: {_e}")
 
         agent_logger.info(
             f"[NavAgent] 链路提取完成 | 原始={len(all_links)} | "

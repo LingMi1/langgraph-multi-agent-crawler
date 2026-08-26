@@ -109,6 +109,13 @@ def _is_list_page(html: str, text_content: str) -> tuple[bool, float, str]:
     
     返回: (is_list, confidence, reason)
     """
+    # ★ 规则 13：RuiQiCMS 等可视化建站产品详情页强信号
+    #   （如 hnbn666.cn 豫花25号页：正文只有 product_content_title 标题 + 产品图，
+    #   无文字描述）。product_content_title 是详情页标题容器，列表页用的是
+    #   rzq:product 模板占位不含它 → 判为详情页，避免被下方链接密度规则误判为
+    #   列表页而走列表分支（BS4 清洗 + 正文过短拦截，产品详情页全丢）。
+    if re.search(r'class="[^"]*product_content_title', html, re.I) and '<img' in html.lower():
+        return False, 0.0, "产品详情页信号(product_content_title)"
     try:
         soup = BeautifulSoup(html, "html.parser")
     except Exception:

@@ -59,6 +59,7 @@ _ADAPTIVE_STATS: Dict[str, Any] = {
 from agents.scout import PageScout
 from agents.nav import NavigationParser
 from agents.fetcher import HttpxPlaywrightFetcher
+from agents.fetcher import _fetch_with_playwright_sync as _pw_fetch_sync
 from agents.extractor import (
     TrafilaturaExtractor,
     _is_list_page,
@@ -197,11 +198,52 @@ def _is_pagination_url(url: str) -> bool:
     return bool(_PAGINATION_URL_RE.search(path))
 
 
+# ★ rzq 模板页渲染结果缓存：同一 URL 只渲染一次（_extract_body_links 可能被
+#   列表页分支与统一补链重复调用，避免重复 Playwright 渲染）
+_RZQ_RENDER_CACHE: Dict[str, Optional[str]] = {}
+
+
 def _extract_body_links(html: str, page_url: str, base_host: str) -> List[Tuple[str, str]]:
     """
     从页面 body 中提取所有同域内部链接（复现 pipeline.py 的 BFS 逻辑）。
     Returns: [(abs_url, link_text), ...]
+
+    JS 模板站兜底（RuiQiCMS 等可视化建站）：HTML 含 <rzq:xxx> 未渲染模板占位
+    （href="/#{directory}/#{id}_xxx.html"），静态解析提取不到真实链接 →
+    Playwright 渲染后重新提取（渲染后 rzq 模板变为真实 <a href>）。
     """
+    links = _extract_body_links_static(html, page_url, base_host)
+
+    if re.search(r'<rzq:[a-z]+\b', html or "", re.I):
+        rkey = _url_key(page_url)
+        rendered = _RZQ_RENDER_CACHE.get(rkey)
+        if rendered is None:
+            try:
+                rendered, _, _err = _pw_fetch_sync(page_url)
+            except Exception as _e:
+                rendered = ""
+                agent_logger.warning(f"[Graph::fetch_extract] rzq 渲染补链失败: {_e}")
+            _RZQ_RENDER_CACHE[rkey] = rendered
+        if rendered and len(rendered) > len(html or ""):
+            rendered_links = _extract_body_links_static(rendered, page_url, base_host)
+            # 合并去重（保留静态+渲染的并集，静态优先）
+            seen_keys = {_url_key(u) for u, _ in links}
+            for u, t in rendered_links:
+                k = _url_key(u)
+                if k not in seen_keys:
+                    seen_keys.add(k)
+                    links.append((u, t))
+            if rendered_links:
+                agent_logger.info(
+                    f"[Graph::fetch_extract] rzq 模板页 Playwright 渲染补链: "
+                    f"+{len(rendered_links)} (共{len(links)}) | {page_url[:70]}"
+                )
+
+    return links
+
+
+def _extract_body_links_static(html: str, page_url: str, base_host: str) -> List[Tuple[str, str]]:
+    """静态提取 body 内同域链接（不含 JS 渲染）。"""
     soup = BeautifulSoup(html, "html.parser")
     body = soup.find("body") or soup
     links: List[Tuple[str, str]] = []
@@ -1342,6 +1384,37 @@ async def _process_one_url(
         stats["skipped"] = stats.get("skipped", 0) + 1
         return []
 
+    # ★ JS 模板站统一补链（RuiQiCMS 等可视化建站）：HTML 含 <rzq:xxx> 未渲染模板占位。
+    #   首页/栏目页常被 _is_list_page 判为正文页而跳过下方列表页分支的子链接提取，
+    #   故在此（列表页/详情页分支之前）统一执行：rzq 页无论哪种类型都 Playwright
+    #   渲染补链，静态链接并入队。非 rzq 页零开销。
+    if re.search(r'<rzq:[a-z]+\b', page.html or "", re.I):
+        body_links = await loop.run_in_executor(
+            None, _extract_body_links, page.html, url, base_host
+        )
+        if body_links:
+            new_depth = depth + 1
+            added = 0
+            for abs_url, link_text in body_links:
+                key = _url_key(abs_url)
+                if key not in seen_keys:
+                    seen_keys.append(key)
+                    clean_text = (link_text or "").lstrip("> \t\r\n")[:20]
+                    if clean_text and _re.match(r'^\d{1,2}$', clean_text):
+                        clean_text = ""
+                    queue.append({
+                        "url": abs_url,
+                        "depth": new_depth,
+                        "nav_path": nav_path,
+                        "_pagination": _is_pagination_url(abs_url),
+                    })
+                    added += 1
+            if added:
+                agent_logger.info(
+                    f"[Graph::fetch_extract] rzq 模板站统一补链 +{added} "
+                    f"(depth={depth}→{new_depth}) | {url[:60]}"
+                )
+
     if is_list and depth < 4:
         # ★ 列表页层级登记：列表页自身是 URL 层级的一环。
         #   1) 用注册表查父级层级（一级来自首页导航映射，更深来自已登记的列表页）
@@ -1501,7 +1574,11 @@ async def _process_one_url(
     else:
         extractor = _get_extractor()
         try:
-            if is_list:
+            # ★ 规则 13：纯图片产品详情页（RuiQiCMS 产品详情只有标题+图）强制走 BS4——
+            #   trafilatura 会剥掉 product_content_title 标题和产品图（只剩导航噪音），
+            #   BS4 保留标题容器+图片，落盘才有价值。
+            _rule13_bs4 = _is_pure_image_product_detail(rescued_html or page.html)
+            if is_list or _rule13_bs4:
                 # ★ 列表页/栏目页提速：跳过 extractor 的 LLM 深降级（列表页无需精确正文，
                 #   trafilatura+BS4 低置信度时直接调 LLM 每页十几秒且烧 token），改用 BS4 清洗。
                 cleaned_html, text_content, _, _ = await loop.run_in_executor(
@@ -1518,7 +1595,7 @@ async def _process_one_url(
                     is_list_page_detected_at_extract=(len(text_content or "") < 50),
                 )
                 agent_logger.info(
-                    f"[Graph::fetch_extract] 列表页使用 BS4 清洗(跳过 LLM 深降级) | {url[:60]}"
+                    f"[Graph::fetch_extract] {'规则13纯图详情页' if _rule13_bs4 else '列表页'}使用 BS4 清洗(跳过 LLM 深降级) | {url[:60]}"
                 )
             else:
                 cleaned = await extractor.extract(page, profile)
@@ -1653,7 +1730,12 @@ async def _process_one_url(
     # 两者仅在文本过短（<200 字）时丢弃，长内容页（如招聘正文）不受影响。
     _check_text = re.sub(r'<[^>]+>', '', structured_body)
     _check_text = re.sub(r'\s+', '', _check_text)  # 基于最终正文（升级可能替换过）重新计算
-    if len(_check_text) < 80 or ((_is_qr_page or _is_func_page) and len(_check_text) < 200):
+    # ★ 规则 13：纯图片产品详情页（RuiQiCMS 产品详情只有标题+图、无文字描述，
+    #   text 仅 12-16 字）→ 放行正文过短/纯图页拦截，正常落盘。
+    #   信号必须查 rescued_html（清洗前原始 HTML）：extractor.extract 会把
+    #   page.html 替换成 trafilatura 产物，product_content_title 已被剥离。
+    _pure_img_detail = _is_pure_image_product_detail(rescued_html or page.html or structured_body)
+    if (len(_check_text) < 80 or ((_is_qr_page or _is_func_page) and len(_check_text) < 200)) and not _pure_img_detail:
         _drop_tag = '/二维码聚合页' if _is_qr_page else ('/功能页' if _is_func_page else '')
         agent_logger.info(
             f"[Graph::fetch_extract] 正文过短({len(_check_text)}字){_drop_tag}，丢弃 | {url[:60]}"
@@ -1714,7 +1796,7 @@ async def _process_one_url(
     qr_text = re.sub(r'<[^>]+>', '', qr_html)
     qr_text = re.sub(r'\s+', '', qr_text)
     qr_imgs = len(re.findall(r'<img\b', cleaned.html or "", re.I))
-    if len(qr_text) < 150 and qr_imgs >= 3:
+    if len(qr_text) < 150 and qr_imgs >= 3 and not _pure_img_detail:
         stats["skipped_qr"] = stats.get("skipped_qr", 0) + 1
         agent_logger.info(
             f"[Graph::fetch_extract] 二维码聚合页/纯图页(text={len(qr_text)}字, imgs={qr_imgs})，"
@@ -1728,7 +1810,7 @@ async def _process_one_url(
             f"[Graph::fetch_extract] 列表页/分页页无实质正文，不落盘 | "
             f"text={len(_check_text)} | {url[:60]}"
         )
-    elif not is_list and not _detail_content_ok(qr_text, qr_html):
+    elif not is_list and not _detail_content_ok(qr_text, qr_html) and not _pure_img_detail:
         # ★ detail 页落盘前质量校验：正文 <80 字（空壳页，选择器命中 meta/标题区），
         #   或正文区链接密度过高（坏选择器命中了列表容器，正文全是链接标题）→ 不落盘
         rel_path = ""
@@ -4632,6 +4714,30 @@ def _strip_nav_noise(html: str) -> str:
         el.decompose()
         removed += 1
 
+    # 12. 可视化编辑器模板容器兜底（RuiQiCMS 等建站系统，如 hnbn666.cn）：
+    #     <rzq:product href="/#{directory}/#{id}_productxx.html"> 等自定义标签是
+    #     **未渲染的 JS 模板占位**（真实链接由前端 JS 填充），只出现在首页/列表页
+    #     的可视化模块区；真实详情页正文区（news_content_title / product_content_title
+    #     / .ar_tit 等）不含它。正文容器含 <rzq:> 且无真实详情页标题信号 →
+    #     整页是模板残体，删除 move-monitor 模块容器 → 触发 _detail_content_ok
+    #     空正文拒收，不落盘（hnbn666 实测首页把模块模板+轮播当正文保存）。
+    if re.search(r'<rzq:[a-z]+\b', str(soup), re.I):
+        art = soup.select_one("article.content")
+        target = art if art is not None else soup.body
+        if target is not None:
+            real_detail = target.select_one(
+                ".news_content_title, .product_content_title, .ar_tit, "
+                ".article-title, .detail-title, .danpian-h1, [class*=content_title]"
+            )
+            if not real_detail:
+                _blocks = target.select(".move-monitor") or target.select(".module-context")
+                for _b in _blocks:
+                    _b.decompose()
+                    removed += 1
+                for _rzq in target.find_all(re.compile(r'^rzq:', re.I)):
+                    _rzq.decompose()
+                    removed += 1
+
     if removed:
         agent_logger.info(f"[Graph::clean] 去除导航栏残留 {removed} 处")
 
@@ -4681,6 +4787,21 @@ def _extract_publish_date(html: str) -> str:
     """从模板 HTML 提取发布日期（header 区 meta："发布时间：2025-09-18"）"""
     m = re.search(r"(\d{4}-\d{2}-\d{2})", html or "")
     return m.group(1) if m else ""
+
+
+def _is_pure_image_product_detail(html: str) -> bool:
+    """规则 13：纯图片产品详情页强信号（RuiQiCMS 等可视化建站）。
+
+    如 hnbn666.cn 豫花25号页：正文区只有 product_content_title 标题容器 + 产品图，
+    无文字描述（text 仅 12-16 字）。product_content_title 是详情页标题容器，
+    列表页用的是 rzq:product 模板占位不含它 → 判定为产品详情页，放行落盘
+    （存标题+图片，避免有效产品页被"正文过短/纯图页"拦截丢弃）。
+    """
+    if not html:
+        return False
+    if not re.search(r'class="[^"]*product_content_title', html, re.I):
+        return False
+    return bool(re.search(r'<img\b', html, re.I))
 
 
 def _detail_content_ok(text: str, html: str) -> bool:
