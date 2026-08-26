@@ -4595,6 +4595,43 @@ def _strip_nav_noise(html: str) -> str:
         el.decompose()
         removed += 1
 
+    # 11. 纯 span 无链接多级导航树兜底（建站系统模板，如 shhggroup）：
+    #     <div class="nav|menu|..."><ul class="list-unstyled"><li><span>栏目</span>
+    #     [<ul><li><span>子栏目</span></li></ul>]</li>...</ul></div>，
+    #     菜单项全是 <li><span> 无 <a href> 链接，class 只有 nav/menu/list-unstyled
+    #     等通用词，规则 7（链接数<5）/8（文本>200 跳过）/9（class 不含 _nav 词）
+    #     全部失配 → 整棵树被当成正文（shhggroup 实测 29 页正文即整站导航树）。
+    #     特征：无 <a href> 链接 + li≥6 + （文本含"首页/Home/主站"锚点 或 class/id
+    #     命中 menu/nav/sidebar/submenu/dropdown）+ 无正文信号（日期/页码/句号等）。
+    _nav_tree_cls = re.compile(
+        r'(menu|nav|sidebar|submenu|dropdown)', re.I
+    )
+    for el in soup.find_all(["div", "ul", "ol", "nav", "td"]):
+        if el.find(["h1", "h2", "h3", "h4", "h5", "h6", "img"]):
+            continue
+        if el.find_all("a", href=True):
+            continue
+        lis = el.find_all("li")
+        if len(lis) < 6:
+            continue
+        t = el.get_text(" ", strip=True)
+        if not t or len(t) > 1600:
+            continue
+        # 正文信号保护：出现日期/页码/句号/逗号等（导航树是纯栏目名，无标点）
+        if re.search(
+            r'\d{4}[-/年]\d{1,2}|共\s*\d+\s*条|第\s*\d+\s*页|下一页|'
+            r'\d{1,2}[-/]\d{1,2}|[。；：，、]', t
+        ):
+            continue
+        attrs = getattr(el, "attrs", None) or {}
+        cls = " ".join(attrs.get("class") or [])
+        cid = attrs.get("id") or ""
+        if not (re.search(r'首页|Home|主站', t, re.I)
+                or _nav_tree_cls.search(cls) or _nav_tree_cls.search(cid)):
+            continue
+        el.decompose()
+        removed += 1
+
     if removed:
         agent_logger.info(f"[Graph::clean] 去除导航栏残留 {removed} 处")
 
@@ -4682,6 +4719,33 @@ def _detail_content_ok(text: str, html: str) -> bool:
     return True
 
 
+def _url_discriminator(url: str, max_len: int = 36) -> str:
+    """从 URL 提取可读后缀，用于同标题文件去重（替代纯 _N 递增）。
+
+    例: https://www.shhggroup.com/project/xxxjp?id=8308 → project_xxxjp_id8308
+    例: https://example.com/news/detail.html?nid=12 → news_detail_nid12
+    取不到特征（纯首页/裸域名）返回 ""，调用方回退 _N 递增。
+    """
+    try:
+        p = urlparse(url)
+        segs = []
+        for s in p.path.split("/"):
+            if not s:
+                continue
+            s = re.sub(r'\.[^.]+$', '', s)  # 去扩展名
+            s = re.sub(r'[\\/:*?"<>|]', "_", s)
+            if s and s.lower() not in ("index",):
+                segs.append(s)
+        seg = "_".join(segs[-2:])
+        m = re.search(r'[?&](?:id|nid|newsid|articleid|aid)=([^&]+)', url, re.I)
+        if m:
+            seg = (seg + "_" if seg else "") + "id" + m.group(1)
+        seg = re.sub(r'\s+', "", seg)[:max_len]
+        return seg or ""
+    except Exception:
+        return ""
+
+
 async def _save_html_file(page: PageData, output_dir: str) -> str:
     """保存清洗后的 HTML 到磁盘，返回相对路径。
 
@@ -4737,22 +4801,25 @@ async def _save_html_file(page: PageData, output_dir: str) -> str:
     if norm_path in _saved_html_paths:
         # ★ 本次运行已保存过同名文件（真实同名冲突）→ 优先用「标题_发布日期」区分
         #   （同标题不同日期的文章，如哈电多篇"领导班子成员调整"公告），
-        #   提取不到日期再回退 _N 后缀。
+        #   再以「标题_URL特征」（路径段+id）区分同栏目名文章——shhggroup 等模板站
+        #   大量详情页 <title> 即栏目名（如"专题专栏"），纯 _N 递增会泛滥（实测 461 个），
+        #   URL 特征后缀对同一 URL 唯一，可彻底消除 _N 累积。
         date_str = _extract_publish_date(page.html or "")
-        if date_str:
-            file_path = os.path.join(dir_path, f"{name}_{date_str}.html")
-            norm_path = os.path.normpath(file_path)
-            counter = 1
-            while norm_path in _saved_html_paths or os.path.exists(file_path):
-                file_path = os.path.join(dir_path, f"{name}_{date_str}_{counter}.html")
-                norm_path = os.path.normpath(file_path)
-                counter += 1
-        else:
-            counter = 1
-            while os.path.exists(file_path):
-                file_path = os.path.join(dir_path, f"{name}_{counter}.html")
-                counter += 1
-            norm_path = os.path.normpath(file_path)
+        url_sfx = _url_discriminator(page.url)
+        base_name = f"{name}_{date_str}" if date_str else name
+        counter = 1
+        while True:
+            if url_sfx:
+                fname = (f"{base_name}_{url_sfx}.html" if counter == 1
+                         else f"{base_name}_{url_sfx}_{counter}.html")
+            else:
+                fname = f"{base_name}_{counter}.html"
+            cand = os.path.join(dir_path, fname)
+            cand_norm = os.path.normpath(cand)
+            if cand_norm not in _saved_html_paths and not os.path.exists(cand):
+                file_path, norm_path = cand, cand_norm
+                break
+            counter += 1
     # 否则：磁盘上若存在同名文件（上次运行残留），直接覆盖写，不生成 _N.html
 
     # ── 路径级去重：同一路径只写一次（防止 LangGraph 状态循环导致重复调用） ──
