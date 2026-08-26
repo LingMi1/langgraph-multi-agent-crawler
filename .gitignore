@@ -16,6 +16,13 @@ _debug_*.py
 _run_*.py
 _test_*.py
 _verify_*.py
+_analyze_*.py
+_check_*.py
+_chk_*.py
+_clean_*.py
+_dbg_*.py
+_rerun_*.py
+_*_raw.html
 _unit_test_nav.py
 
 # ── 打包产物 ──
