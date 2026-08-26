@@ -23,6 +23,7 @@ build/
 dist/
 *.exe
 *.spec.bak
+libs_vendor/
 
 # ── Python 缓存 ──
 __pycache__/

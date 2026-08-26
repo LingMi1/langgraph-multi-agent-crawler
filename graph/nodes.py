@@ -49,6 +49,7 @@ _ADAPTIVE_STATS: Dict[str, Any] = {
     "reject": 0,      # 升级产物不合格被拒
     "fail": 0,        # 升级调用失败回退
     "func_skip": 0,   # 功能页/二维码页跳过升级（后续丢弃，不浪费 LLM）
+    "llm_calls": 0,   # LLM 清洗实际调用次数（成本统计用）
 }
 
 # 复用现有 Agent 模块
@@ -3675,6 +3676,8 @@ async def _llm_clean_content_html(
     if not rescued_html:
         return ""
     try:
+        # ★ LLM 清洗调用计数（供 GUI 流水线监控统计成本）
+        _ADAPTIVE_STATS["llm_calls"] = _ADAPTIVE_STATS.get("llm_calls", 0) + 1
         prompt = get_prompt("清洗提示词.txt")
         full_clean_note = (
             "\n\n【整篇清洗执行说明（必须遵守）】本任务为整篇清洗模式，与两段式不同："

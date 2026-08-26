@@ -11,15 +11,17 @@ import sys
 import os
 import json
 import time
+import re
 from datetime import datetime
-from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import site_crawler
 import main as langgraph_main
+from graph import nodes as _gn   # 读取自适应清洗统计（LLM 升级/功能页丢弃等）
 
 CONFIG_FILE = "config.json"
+MAX_SITES = 30   # 单次任务最多爬取网站数
 
 PLATFORMS = [
     ("DeepSeek（深度求索）", "https://api.deepseek.com/v1", "deepseek-chat",
@@ -42,8 +44,8 @@ PLATFORM_NAMES = [p[0] for p in PLATFORMS]
 class CrawlerGUI:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("网站爬取工具 v1.2")
-        self.root.geometry("680x660")
+        self.root.title("网站爬取工具 v1.3")
+        self.root.geometry("680x820")
         self.root.resizable(True, True)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -55,12 +57,16 @@ class CrawlerGUI:
         self.base_url = tk.StringVar()
         self.model_name = tk.StringVar()
         self.platform_var = tk.StringVar()
-        self.crawl_mode = tk.StringVar(value="traditional")
 
-        # ★ 进度条页面级状态（LangGraph 模式使用）
+        # ★ 进度条页面级状态（LangGraph MA 模式使用）
         self._last_fetched = 0      # 当前站已处理页数（停止时保留显示用）
         self._site_index = 0        # 当前站点序号（1-based）
         self._site_total = 0        # 站点总数
+
+        # ★ 流水线监控状态
+        self._current_url = ""      # 当前正在处理的页面 URL
+        self._phase = "idle"        # 当前阶段: fetch / media / storage / idle
+        self._monitor_after = None  # 定时刷新任务句柄
 
         self._build_ui()
         self._auto_load_config()
@@ -106,34 +112,14 @@ class CrawlerGUI:
         self.file_entry = tk.Entry(file_frame, textvariable=self.selected_file, width=40)
         self.file_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         tk.Button(file_frame, text="浏览...", command=self._select_file, width=8).pack(side=tk.LEFT)
-        tk.Label(self.root, text="  支持 .txt，每行一个网址，# 注释，最多 10 个", fg="gray", anchor="w").pack(fill=tk.X, padx=15)
+        tk.Label(self.root, text="  支持 .txt，每行一个网址，# 注释，最多 30 个", fg="gray", anchor="w").pack(fill=tk.X, padx=15)
 
-        # ── 爬取模式选择 ──
-        mode_frame = tk.LabelFrame(self.root, text="🔄 爬取模式", padx=8, pady=6)
-        mode_frame.pack(fill=tk.X, padx=10, pady=(5, 2))
-        mode_row = tk.Frame(mode_frame); mode_row.pack(fill=tk.X, pady=1)
-        self.rb_traditional = tk.Radiobutton(mode_row, text="📋 传统模式（导航菜单分类目录）",
-                                             variable=self.crawl_mode, value="traditional",
-                                             command=self._on_mode_change)
-        self.rb_traditional.pack(side=tk.LEFT, padx=5)
-        self.rb_langgraph = tk.Radiobutton(mode_row, text="⚡ LangGraph 模式（面包屑多级目录）",
-                                            variable=self.crawl_mode, value="langgraph",
-                                            command=self._on_mode_change)
-        self.rb_langgraph.pack(side=tk.LEFT, padx=5)
-        self.rb_agent = tk.Radiobutton(mode_row, text="🤖 Agent 智能模式（Supervisor 多智能体，需要 API Key）",
-                                        variable=self.crawl_mode, value="agent",
-                                        command=self._on_mode_change)
-        self.rb_agent.pack(side=tk.LEFT, padx=5)
-        self.rb_multi = tk.Radiobutton(mode_row, text="🧠 Multi-Agent 模式（Scout→Nav→Fetch→Extract 流水线）",
-                                        variable=self.crawl_mode, value="multi_agent",
-                                        command=self._on_mode_change)
-        self.rb_multi.pack(side=tk.LEFT, padx=5)
-        self.rb_lg_ma = tk.Radiobutton(mode_row, text="⟐ LangGraph MA 模式（传统爬虫 + LLM 评估，StateGraph 架构）",
-                                        variable=self.crawl_mode, value="langgraph_ma",
-                                        command=self._on_mode_change)
-        self.rb_lg_ma.pack(side=tk.LEFT, padx=5)
-        self.mode_hint = tk.Label(mode_frame, text="📋 传统模式：导航菜单分类目录", fg="gray", anchor="w")
-        self.mode_hint.pack(fill=tk.X, padx=5, pady=(2, 0))
+        # ── 直接输入网址 ──
+        url_frame = tk.LabelFrame(self.root, text="🌐 输入网址（直接爬取，优先于文件）", padx=8, pady=6)
+        url_frame.pack(fill=tk.X, padx=10, pady=(5, 2))
+        self.url_input = tk.Text(url_frame, height=2, wrap=tk.WORD)
+        self.url_input.pack(fill=tk.X, pady=(0, 3))
+        tk.Label(url_frame, text="  直接粘贴一个或多个网址（空格/逗号/换行分隔），即可开始爬取", fg="gray", anchor="w").pack(fill=tk.X)
 
         # ── 按钮 ──
         btn_frame = tk.Frame(self.root); btn_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -151,6 +137,14 @@ class CrawlerGUI:
         self.progress_bar.pack(fill=tk.X, pady=(0, 3))
         self.status_label = tk.Label(progress_frame, text="就绪", fg="gray", anchor="w")
         self.status_label.pack(fill=tk.X)
+
+        # ── 流水线监控（Agent 可观测性）──
+        mon_frame = tk.LabelFrame(self.root, text="📊 流水线监控（Agent 内部状态实时可见）", padx=8, pady=6)
+        mon_frame.pack(fill=tk.X, padx=10, pady=(5, 2))
+        self.mon_url_label = tk.Label(mon_frame, text="当前页面: -", fg="#1F618D", anchor="w", wraplength=620)
+        self.mon_url_label.pack(fill=tk.X)
+        self.mon_stats_label = tk.Label(mon_frame, text="清洗分诊: -", fg="#2874A6", anchor="w", wraplength=620)
+        self.mon_stats_label.pack(fill=tk.X)
 
         # ── 主日志 ──
         log_frame = tk.LabelFrame(self.root, text="日志", padx=8, pady=6)
@@ -253,67 +247,70 @@ class CrawlerGUI:
         for u in urls:
             n = u.rstrip("/")
             if n not in seen: seen.add(n); unique.append(u)
-        if len(unique) > 10:
-            messagebox.showwarning("网址过多", f"{len(unique)} 个网址，最多10个，只取前10个")
-            unique = unique[:10]
+        if len(unique) > MAX_SITES:
+            messagebox.showwarning("网址过多", f"{len(unique)} 个网址，最多{MAX_SITES}个，只取前{MAX_SITES}个")
+            unique = unique[:MAX_SITES]
         return unique
 
-    # ==================== 模式切换 ====================
-
-    def _on_mode_change(self):
-        mode = self.crawl_mode.get()
-        if mode == "langgraph_ma":
-            self.mode_hint.config(text="⟐ LangGraph MA 模式：传统爬虫为主 + LLM 评估为辅（StateGraph 条件路由，最多3轮自动调整）")
-        elif mode == "multi_agent":
-            self.mode_hint.config(text="🧠 Multi-Agent 模式：Scout→Nav→Fetch→Extract 异步流水线（不依赖 LLM，基于规则 + trafilatura）")
-        elif mode == "agent":
-            self.mode_hint.config(text="🤖 Agent 智能模式：Supervisor 多智能体自动决策（需要配置 API Key）")
-        elif mode == "langgraph":
-            self.mode_hint.config(text="⚡ LangGraph 模式：支持面包屑多级目录解析")
-        else:
-            self.mode_hint.config(text="📋 传统模式：导航菜单分类目录")
+    def _parse_input_urls(self):
+        """从输入框解析网址：支持空格/逗号/换行分隔，去重、限10个"""
+        raw = self.url_input.get("1.0", tk.END)
+        urls = []
+        for chunk in re.split(r"[\s,，;；]+", raw):
+            chunk = chunk.strip()
+            if not chunk or chunk.startswith('#'): continue
+            if not chunk.startswith(('http://', 'https://')): continue
+            urls.append(chunk)
+        seen = set(); unique = []
+        for u in urls:
+            n = u.rstrip("/")
+            if n not in seen: seen.add(n); unique.append(u)
+        if len(unique) > MAX_SITES:
+            messagebox.showwarning("网址过多", f"{len(unique)} 个网址，最多{MAX_SITES}个，只取前{MAX_SITES}个")
+            unique = unique[:MAX_SITES]
+        return unique
 
     # ==================== 爬取控制 ====================
 
     def _start_crawl(self):
         if self.is_running: return
 
-        filepath = self.selected_file.get().strip()
-        if not filepath: messagebox.showerror("错误", "请先选择 .txt 文件"); return
-        if not os.path.exists(filepath): messagebox.showerror("错误", "文件不存在"); return
-
-        urls = self._parse_urls(filepath)
-        if not urls: messagebox.showerror("错误", "没有有效网址"); return
+        # 优先使用输入框网址，为空则回退到文件
+        urls = self._parse_input_urls()
+        if urls:
+            self.log(f"🌐 已读取输入框网址，共 {len(urls)} 个")
+        else:
+            filepath = self.selected_file.get().strip()
+            if not filepath:
+                messagebox.showerror("错误", "请先输入网址或选择 .txt 文件"); return
+            if not os.path.exists(filepath): messagebox.showerror("错误", "文件不存在"); return
+            urls = self._parse_urls(filepath)
+            if not urls: messagebox.showerror("错误", "没有有效网址"); return
 
         api_key = self.api_key.get().strip()
         base_url = self.base_url.get().strip()
         model_name = self.model_name.get().strip()
 
-        # API Key 可选化：Multi-Agent / 传统模式不需要 LLM
+        # API Key 可选化：LangGraph MA 模式有 LLM 则用 LLM 评估，无则用启发式评估
         has_llm = bool(api_key and base_url and model_name)
-        mode = self.crawl_mode.get()
-        if mode in ("multi_agent", "langgraph_ma"):
-            if has_llm:
-                self.log("ℹ️ 已配置 API Key，LLM 评估/深降级将使用")
-            else:
-                self.log("ℹ️ 未配置 API Key，将使用启发式评估（无需 LLM）")
-        elif not has_llm:
-            self.log("ℹ️ 未配置 API Key，将使用默认爬取模式（不调用大模型清洗）")
+        if has_llm:
+            self.log("ℹ️ 已配置 API Key，LLM 评估/深降级将使用")
+        else:
+            self.log("ℹ️ 未配置 API Key，将使用启发式评估（无需 LLM）")
 
         self.is_running = True; self.should_stop = False
         self.stop_event.clear()
         self.btn_start.config(state=tk.DISABLED); self.btn_stop.config(state=tk.NORMAL)
         self.log_text.delete('1.0', tk.END); self.skip_text.delete('1.0', tk.END)
+        # ★ 启动流水线监控定时刷新（500ms）
+        self._current_url = ""; self._phase = "idle"
+        self._schedule_monitor()
 
         # 打印全局输出根目录
         output_root = os.path.abspath("output")
         self.log(f"📂 [系统提示] 本次爬取的数据将保存至: {output_root}")
 
-        mode = self.crawl_mode.get()
-        mode_label = {"agent": "🤖 Agent 智能", "langgraph": "⚡ LangGraph",
-                      "traditional": "📋 传统", "multi_agent": "🧠 Multi-Agent",
-                      "langgraph_ma": "⟐ LangGraph MA"}.get(mode, mode)
-        self.log(f"{mode_label}模式 — 共加载 {len(urls)} 个网址，开始预检...")
+        self.log(f"⟐ LangGraph MA 模式 — 共加载 {len(urls)} 个网址，开始预检...")
 
         threading.Thread(target=self._precheck_worker, args=(urls, api_key, base_url, model_name), daemon=True).start()
 
@@ -373,11 +370,6 @@ class CrawlerGUI:
         start_time = time.time()
         success = 0; failed = 0
         summary = []
-        mode = self.crawl_mode.get()
-        use_langgraph = (mode == "langgraph")
-        use_agent = (mode == "agent")
-        use_multi = (mode == "multi_agent")
-        use_lg_ma = (mode == "langgraph_ma")
 
         for i, url in enumerate(urls):
             if self.should_stop:
@@ -397,177 +389,37 @@ class CrawlerGUI:
             pages = 0
             company_name = ""
             try:
-                if use_lg_ma:
-                    # ⟐ LangGraph MA 模式：传统爬虫为主 + LLM 评估（StateGraph 条件路由）
-                    self.log(f"⟐ [LangGraph MA 模式] 启动 StateGraph 工作流...", "info")
+                # ⟐ LangGraph MA 模式：传统爬虫为主 + LLM 评估（StateGraph 条件路由）
+                self.log(f"⟐ [LangGraph MA 模式] 启动 StateGraph 工作流...", "info")
 
-                    if api_key:
-                        os.environ["DEEPSEEK_API_KEY"] = api_key
-                        os.environ["DEEPSEEK_BASE_URL"] = base_url
-                        os.environ["DEEPSEEK_MODEL"] = model_name
-                        import config as _cfg
-                        _cfg.DEEPSEEK_API_KEY = api_key
-                        _cfg.DEEPSEEK_BASE_URL = base_url
-                        _cfg.DEEPSEEK_MODEL = model_name
-
-                    # ★ 强制重置 LangGraph MA 的 LLM 单例，确保改 key/base_url 后不重启也能生效
-                    from graph import nodes as _gn
-                    _gn.reset_llm()
-                    from agents import extractor as _ext
-                    _ext.reset_llm_client()
-
-                    pages = langgraph_main.run_langgraph_crawler(
-                        url,
-                        concurrency=5,
-                        log_callback=self._langgraph_log,
-                        reset_memory=False,
-                        progress_callback=self._lg_progress,
-                    ) or 0
-
-                    # 推算输出目录（scout_node 创建的是 output/<netloc>，保留 www）
-                    parsed_base = urlparse(url)
-                    domain = parsed_base.netloc.replace(":", "_")
-                    site_dir = os.path.join("output", domain)
-                    company_name = domain
-
-                elif use_multi:
-                    # 🧠 Multi-Agent 模式：Scout→Nav→Fetcher→Extractor→Storage 异步流水线
-                    self.log(f"🧠 [Multi-Agent 模式] 启动异步流水线 (并发={5})...", "info")
-
-                    # 注入 API 配置（ExtractorAgent LLM 深降级时使用）
-                    if api_key:
-                        import config as _cfg
-                        _cfg.DEEPSEEK_API_KEY = api_key
-                        _cfg.DEEPSEEK_BASE_URL = base_url
-                        _cfg.DEEPSEEK_MODEL = model_name
-                        os.environ["DEEPSEEK_API_KEY"] = api_key
-                        os.environ["DEEPSEEK_BASE_URL"] = base_url
-                        os.environ["DEEPSEEK_MODEL"] = model_name
-
-                    # ★ 强制重置 ExtractorAgent 的 LLM 单例，确保改 key/base_url 后不重启也能生效
-                    from agents import extractor as _ext
-                    _ext.reset_llm_client()
-
-                    pages = langgraph_main.run_multi_agent(
-                        url,
-                        concurrency=5,
-                        log_callback=self._langgraph_log,
-                        reset_memory=False,
-                    ) or 0
-
-                    # 推算输出目录（scout_node 创建的是 output/<netloc>，保留 www）
-                    parsed_base = urlparse(url)
-                    domain = parsed_base.netloc.replace(":", "_")
-                    site_dir = os.path.join("output", domain)
-                    company_name = domain
-
-                elif use_agent:
-                    # 🤖 Agent 模式：通过环境变量注入 API 配置，调用 Supervisor Agent
-                    self.log(f"🤖 [Agent模式] 启动 Supervisor 多智能体...", "info")
-                    if api_key:
-                        os.environ["DEEPSEEK_API_KEY"] = api_key
-                    if base_url:
-                        os.environ["DEEPSEEK_BASE_URL"] = base_url
-                    if model_name:
-                        os.environ["DEEPSEEK_MODEL"] = model_name
-                    
-                    # ★ 直接修改 config 模块变量，避免模块级变量已在导入时求值为空
+                if api_key:
+                    os.environ["DEEPSEEK_API_KEY"] = api_key
+                    os.environ["DEEPSEEK_BASE_URL"] = base_url
+                    os.environ["DEEPSEEK_MODEL"] = model_name
                     import config as _cfg
                     _cfg.DEEPSEEK_API_KEY = api_key
                     _cfg.DEEPSEEK_BASE_URL = base_url
                     _cfg.DEEPSEEK_MODEL = model_name
-                    # ★ 强制重置 LLM 单例，确保使用新配置
-                    import supervisor as _sv
-                    _sv.reset_supervisor_llm()
-                    import workers as _wk
-                    _wk.reset_worker_llm()
 
-                    # 预检获取公司名创建输出目录
-                    check_result = site_crawler.deep_pre_check(url)
-                    if check_result.get("pass") and check_result.get("html"):
-                        try:
-                            parsed_base = urlparse(url)
-                            domain = parsed_base.netloc.replace("www.", "").replace(":", "_")
-                            soup = BeautifulSoup(check_result["html"], "html.parser")
-                            company_name = site_crawler._safe_filename(
-                                site_crawler.extract_company_name(soup, domain))
-                        except Exception:
-                            company_name = site_crawler._safe_filename(domain)
-                    else:
-                        parsed_base = urlparse(url)
-                        company_name = site_crawler._safe_filename(
-                            parsed_base.netloc.replace("www.", "").replace(":", "_"))
+                # ★ 强制重置 LangGraph MA 的 LLM 单例，确保改 key/base_url 后不重启也能生效
+                from graph import nodes as _gn
+                _gn.reset_llm()
+                from agents import extractor as _ext
+                _ext.reset_llm_client()
 
-                    site_dir = os.path.join("output", company_name)
-                    os.makedirs(site_dir, exist_ok=True)
-                    self.log(f"📁 Agent 输出目录: {site_dir}", "info")
+                pages = langgraph_main.run_langgraph_crawler(
+                    url,
+                    concurrency=5,
+                    log_callback=self._langgraph_log,
+                    reset_memory=False,
+                    progress_callback=self._lg_progress,
+                ) or 0
 
-                    pages = langgraph_main.run_agent(
-                        url,
-                        log_callback=self._langgraph_log,
-                        stop_event=self.stop_event,
-                        site_dir=site_dir
-                    ) or 0
-                elif use_langgraph:
-                    # ⚡ LangGraph 模式：深度反爬预检 + 熔断跳过机制
-
-                    # ---- 第1步：深度预检（在建目录之前，防反爬假200 OK） ----
-                    check_result = site_crawler.deep_pre_check(url)
-                    if not check_result["pass"]:
-                        self.log(
-                            f"⛔ [LangGraph模式] 预检失败，跳过该网站 [{url}]\n"
-                            f"   原因: {check_result['reason']}",
-                            "fail"
-                        )
-                        summary.append(f"⛔ {url[:50]} - 预检失败: {check_result['reason'][:30]}")
-                        failed += 1
-                        # 记录到跳过汇总
-                        self.root.after(0, lambda r=check_result: self.skip_text.insert(
-                            tk.END, f"⛔ {r['url']}\n   原因：{r['reason']}\n"))
-                        continue  # 跳过！不建目录、不调 LangGraph
-
-                    # ---- 第2步：预检通过，从 HTML 提取公司名并创建输出目录 ----
-                    pre_html = check_result.get("html", "")
-                    parsed_base = urlparse(url)
-                    domain = parsed_base.netloc.replace("www.", "").replace(":", "_")
-                    try:
-                        soup = BeautifulSoup(pre_html, "html.parser")
-                        company_name = site_crawler._safe_filename(
-                            site_crawler.extract_company_name(soup, domain)
-                        )
-                    except Exception:
-                        company_name = site_crawler._safe_filename(domain)
-
-                    site_dir = os.path.join("output", company_name)
-                    os.makedirs(site_dir, exist_ok=True)
-                    self.log(f"📁 LangGraph 输出目录: {site_dir}", "info")
-
-                    # ---- 第3步：调用 LangGraph 入口函数 ----
-                    pages = langgraph_main.run_langgraph(
-                        url,
-                        log_callback=self._langgraph_log,
-                        stop_event=self.stop_event,
-                        site_dir=site_dir
-                    ) or 0
-                else:
-                    # 📋 传统模式：site_crawler.main 内部是 try-except 保护的 crawl()
-                    pages = site_crawler.main(url, api_key, base_url, model_name) or 0
-                    # 传统模式：根据 URL 推算出保存路径（与 site_crawler.crawl 中的逻辑一致）
-                    parsed_base = urlparse(url)
-                    domain = parsed_base.netloc.replace("www.", "").replace(":", "_")
-                    # 尝试读取首页 HTML 提取公司名（与 crawl 内逻辑一致）
-                    try:
-                        from bs4 import BeautifulSoup
-                        import site_crawler as sc
-                        raw_html = sc.fetch(url)
-                        if raw_html:
-                            soup = BeautifulSoup(raw_html, "html.parser")
-                            company_name = sc._safe_filename(sc.extract_company_name(soup, domain))
-                        else:
-                            company_name = sc._safe_filename(domain)
-                    except Exception:
-                        company_name = site_crawler._safe_filename(domain)
-                    site_dir = os.path.join("output", company_name)
+                # 推算输出目录（scout_node 创建的是 output/<netloc>，保留 www）
+                parsed_base = urlparse(url)
+                domain = parsed_base.netloc.replace(":", "_")
+                site_dir = os.path.join("output", domain)
+                company_name = domain
 
                 # 打印完成日志，含具体保存路径
                 if site_dir:
@@ -606,6 +458,8 @@ class CrawlerGUI:
     def _lg_progress(self, fetched, queue_len, url, phase="fetch"):
         """LangGraph 进度回调：fetched=已处理页数, queue_len=剩余/总数页数"""
         self._last_fetched = fetched
+        self._current_url = url or ""
+        self._phase = phase
         total = fetched + queue_len
         if phase == "media":
             label = f"内嵌图片 {fetched}/{total} 页"
@@ -626,8 +480,42 @@ class CrawlerGUI:
             tag = "warn"
         self.log(msg, tag)
 
+    # ==================== 流水线监控（Agent 可观测性） ====================
+
+    def _schedule_monitor(self):
+        """启动/重置监控定时器（500ms 刷新一次）"""
+        if self._monitor_after is not None:
+            try: self.root.after_cancel(self._monitor_after)
+            except Exception: pass
+        self._monitor_after = self.root.after(500, self._refresh_monitor)
+
+    def _refresh_monitor(self):
+        """读取 Agent 内部状态并刷新监控面板：当前页面/阶段 + 清洗分诊/LLM 统计"""
+        phase_name = {"fetch": "⛏ 提取清洗", "media": "🖼 媒体处理",
+                      "storage": "💾 写入", "idle": "空闲"}.get(self._phase, self._phase)
+        url_txt = self._current_url or "-"
+        self.mon_url_label.config(text=f"当前页面: {url_txt}    [阶段: {phase_name}]")
+
+        s = getattr(_gn, "_ADAPTIVE_STATS", {}) or {}
+        total = s.get("total", 0)
+        llm = s.get("llm_calls", 0)
+        txt = (f"清洗分诊: 参与 {total} 页 | 规则通过 {s.get('ok', 0)} "
+               f"| LLM升级 {s.get('upgraded', 0)}次 | 质量低拒绝 {s.get('reject', 0)} "
+               f"| 升级失败 {s.get('fail', 0)} | 功能页/二维码丢弃 {s.get('func_skip', 0)} "
+               f"| LLM清洗调用 {llm} 次")
+        self.mon_stats_label.config(text=txt)
+
+        if self.is_running:
+            self._schedule_monitor()
+
     def _reset_ui(self, complete: bool = True, label: str = ""):
         self.is_running = False
+        # 停止监控定时器，保留最终统计
+        if self._monitor_after is not None:
+            try: self.root.after_cancel(self._monitor_after)
+            except Exception: pass
+            self._monitor_after = None
+        self._refresh_monitor()
         self.btn_start.config(state=tk.NORMAL); self.btn_stop.config(state=tk.DISABLED)
         if complete:
             self.progress_bar['value'] = 100
