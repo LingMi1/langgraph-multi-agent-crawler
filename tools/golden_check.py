@@ -7,6 +7,7 @@
   python tools/golden_check.py            # 跑全部 golden 站点
   python tools/golden_check.py hnbn666   # 只跑匹配的站点
   python tools/golden_check.py --list    # 列出 golden 清单
+  python tools/golden_check.py --offline # 离线复核：不联网，只对已落盘 HTML 断言
 """
 
 import argparse
@@ -46,6 +47,32 @@ GOLDEN_SITES = [
 ]
 
 
+def _scan_backup(site: dict):
+    """扫描该站点已落盘的 HTML：返回 (saved 数量, 关键词是否命中)。
+
+    在线 / 离线两条路径共用同一份"落盘断言"，保证判定口径一致。
+    """
+    netloc = urlparse(site["url"]).netloc.replace(":", "_")
+    out_dir = os.path.join(LOCAL_BACKUP_DIR, netloc)
+    saved = 0
+    keyword_hit = not site.get("keyword")
+    if os.path.isdir(out_dir):
+        for root, _, fs in os.walk(out_dir):
+            for name in fs:
+                if not name.endswith(".html"):
+                    continue
+                saved += 1
+                if keyword_hit:
+                    continue
+                try:
+                    with open(os.path.join(root, name), encoding="utf-8", errors="ignore") as f:
+                        if site["keyword"] in f.read():
+                            keyword_hit = True
+                except OSError:
+                    continue
+    return saved, keyword_hit
+
+
 def _run_one(site: dict, max_steps: int = 3000) -> dict:
     """跑单个 golden 站点，返回结构化评估结果（含指标与耗时）。"""
     import time
@@ -61,41 +88,48 @@ def _run_one(site: dict, max_steps: int = 3000) -> dict:
             "elapsed_s": round(time.time() - t0, 1),
         }
 
+    saved, keyword_hit = _scan_backup(site)
     ok = True
     reasons = []
 
-    saved = stats.get("saved", 0)
     if saved < site["min_saved"]:
         ok = False
         reasons.append(f"saved={saved} < 期望 {site['min_saved']}")
 
-    keyword_hit = True
-    if site.get("keyword"):
-        netloc = urlparse(site["url"]).netloc.replace(":", "_")
-        out_dir = os.path.join(LOCAL_BACKUP_DIR, netloc)
-        keyword_hit = False
-        # 落盘 HTML 按栏目子目录存放 → 递归遍历
-        for root, _, fs in os.walk(out_dir):
-            for name in fs:
-                if not name.endswith(".html"):
-                    continue
-                try:
-                    with open(os.path.join(root, name), encoding="utf-8", errors="ignore") as f:
-                        if site["keyword"] in f.read():
-                            keyword_hit = True
-                            break
-                except OSError:
-                    continue
-            if keyword_hit:
-                break
-        if not keyword_hit:
-            ok = False
-            reasons.append(f"落盘内容未找到关键词 {site['keyword']!r}")
+    if site.get("keyword") and not keyword_hit:
+        ok = False
+        reasons.append(f"落盘内容未找到关键词 {site['keyword']!r}")
 
     return {
         "name": site["name"], "ok": ok, "saved": saved, "min_saved": site["min_saved"],
         "keyword_hit": keyword_hit, "reasons": reasons,
         "elapsed_s": round(time.time() - t0, 1),
+    }
+
+
+def _offline_one(site: dict) -> dict:
+    """离线复核：不联网爬取，直接对已落盘的 HTML 做 golden 断言。
+
+    面向无网络 CI / 本地快速回归：验证清洗与规则链路没有引入回归，
+    但只覆盖"落盘内容"这一层，不验证抓取过程本身。
+    """
+    import time
+
+    t0 = time.time()
+    saved, keyword_hit = _scan_backup(site)
+    ok = True
+    reasons = []
+    if saved < site["min_saved"]:
+        ok = False
+        reasons.append(f"saved={saved} < 期望 {site['min_saved']}（离线目录无足够落盘）")
+    if site.get("keyword") and not keyword_hit:
+        ok = False
+        reasons.append(f"落盘内容未找到关键词 {site['keyword']!r}")
+
+    return {
+        "name": site["name"], "ok": ok, "saved": saved, "min_saved": site["min_saved"],
+        "keyword_hit": keyword_hit, "reasons": reasons,
+        "elapsed_s": round(time.time() - t0, 1), "offline": True,
     }
 
 
@@ -113,6 +147,8 @@ def main() -> int:
     parser.add_argument("--list", action="store_true", help="仅列出 golden 清单")
     parser.add_argument("--json", action="store_true",
                         help="输出结构化 JSON 报告（CI / 指标采集用）")
+    parser.add_argument("--offline", action="store_true",
+                        help="离线复核：不联网爬取，只对已落盘 HTML 做 golden 断言（无网络 CI）")
     args = parser.parse_args()
 
     if args.list:
@@ -125,7 +161,8 @@ def main() -> int:
         print(f"未匹配到站点: {args.filter!r}")
         return 2
 
-    results = [_run_one(s) for s in sites]
+    runner = _offline_one if args.offline else _run_one
+    results = [runner(s) for s in sites]
     failed = sum(0 if r["ok"] else 1 for r in results)
 
     if args.json:

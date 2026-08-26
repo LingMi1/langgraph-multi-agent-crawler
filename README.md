@@ -157,7 +157,7 @@ saved/关键词/耗时，REGRESSION 退出码 1 供 CI 挂钩）。让"改动是
 - **S**：中小型企业官网结构差异大（静态 / JS 模板 / 可视化建站），人工清洗效率低。
 - **T**：一套系统自适应任意网站并自动化全流程。
 - **A**：Supervisor 多智能体 + 计划执行审查闭环 + LLM 关键节点介入 + 规则引擎。
-- **R**：hnbn666.cn 全站冒烟 `saved=6 / failed=0`；137 项单元测试全绿；
+- **R**：hnbn666.cn 全站冒烟 `saved=6 / failed=0`；152 项单元测试全绿；
   单次运行 26 条 trace 事件完整落盘；站点学习模式二次爬取 100% 命中；
   RAG 检索 demo 对落盘页面建索引并命中正确栏目。
 
@@ -186,9 +186,10 @@ GUI 入口：`python site_crawler_gui.py`（博宇 · 网站爬取工具）。
 │                    #   + budget(成本/重试) + react(FC闭环) + semdedup(去重)
 │                    #   + vector_retriever(RAG检索) + eval(评估指标/LLM-judge)
 ├── graph/           # 编排级：workflow(Supervisor) / agents(8 Agent) / nodes(节点逻辑) / state(TypedDict)
-├── tests/           # 137 项单元测试（safety / plan / BaseAgent / 工具 / ReAct / 记账
-│                    #   / 去重 / RAG检索 / 评估指标 / FC评估链路 / 图装配冒烟）
-├── tools/           # analyze_trace(轨迹分析) / golden_check(离线评估,支持--json)
+├── tests/           # 152 项单元测试（safety / plan / BaseAgent / 工具 / 工具安全
+│                    #   / ReAct / 记账 / 去重 / RAG检索 / 评估指标 / FC评估链路
+│                    #   / 图装配冒烟）
+├── tools/           # analyze_trace(轨迹分析) / golden_check(离线评估,支持--json/--offline)
 │                    #   / compare_runs(回归对比) / rag_demo(RAG检索演示)
 ├── memory.py        # SQLite 长期记忆（visited_urls / site_patterns）
 ├── schemas.py       # Pydantic 模型 + 日志
