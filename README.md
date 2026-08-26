@@ -5,8 +5,8 @@
 关键决策节点介入（成本分层），全程可观测、可复现。
 
 > 面试亮点叙事：Supervisor 模式 + Plan-and-Execute + 提示注入防护 + 经验记忆 +
-> 全轨迹可观测 + 轻量 RAG 语义去重 + Function Calling 闭环 + 88 项单元测试。
-> 传统爬虫确定性为主、LLM 为辅，真实业务问题驱动。
+> 全轨迹可观测 + 轻量 RAG（语义去重 + 向量检索）+ Function Calling 闭环 +
+> LLM-as-judge 评估 + 117 项单元测试。传统爬虫确定性为主、LLM 为辅，真实业务问题驱动。
 
 ---
 
@@ -48,7 +48,7 @@
 - **解析清洗**：BeautifulSoup4 · trafilatura · 自研规则引擎（4 级封顶 + 连续去重）
 - **数据模型**：Pydantic v2（严格输出 schema 校验）
 - **持久化**：SQLite（URL 去重 / HTML 缓存 / 站点学习模式）+ 本地文件 + CSV
-- **质量保障**：pytest（88 tests）+ JSONL 全轨迹 + Golden Set 离线评估 + GitHub Actions CI
+- **质量保障**：pytest（117 tests）+ JSONL 全轨迹 + Golden Set 离线评估 + LLM-as-judge + GitHub Actions CI
 
 ## 3. 核心设计
 
@@ -95,6 +95,34 @@ ToolRegistry 是"能力声明"，`FunctionCallingLoop` 把链路走通：**LLM �
 tool_calls 与文本标记两种格式，轮次上限防死循环）。所有 LLM 调用经 `TrackedLLM`
 统一**重试 + 指数退避 + token 记账**——调用层负责扛模型不稳定，业务代码零改动。
 
+### 3.9 多 Agent 协作模式：为什么选 Supervisor
+面试高频题"多 Agent 怎么协作"的选型对照（本项目=单层 Supervisor）：
+
+| 模式 | 思路 | 优点 | 缺点 | 适用 |
+|------|------|------|------|------|
+| **Supervisor（本）** | 监督者统一编排，条件路由分派 | 流程可控、失败可降级、状态集中 | 单点（监督者）、消息路径长 | 流程固定、阶段强依赖的任务 |
+| Handoff | Agent 间直接转交控制权 | 灵活、低延迟 | 难以追踪、易乒乓/死循环 | 客服对话类 |
+| 黑板(Blackboard) | 共享状态，Agent 各自读写 | 松耦合、并行 | 读写竞争、收敛难保证 | 认知任务、多解问题 |
+| 平级广播 | 事件总线，各 Agent 订阅 | 高扩展 | 顺序不确定、难复现 | 无严格顺序的批处理 |
+
+**本项目选型理由**：采集是"侦察 → 导航 → 抓取 → 评估 → 存储"的强顺序流水线，
+阶段间有严格依赖（先有 plan 才有导航、先评估通过才落盘），Supervisor 的单点正是
+它的优点——异常可以隔离在单个 Agent 内并降级，整图不中断。若未来要做多站点并行
+采集，可把 Supervisor 升级为"每站点一个 sub-graph + 顶层协调器"的分层模式。
+
+### 3.10 RAG 检索链路（`agents/vector_retriever.py` + `tools/rag_demo.py`）
+轻量 RAG 从"去重工具"升级为**完整检索链路**：爬取落盘 HTML → 抽取正文 →
+**字符 n-gram TF-IDF 稀疏向量 + 余弦相似度**建索引 → `rag_search` 工具语义检索。
+纯 Python 零外部依赖（不依赖 numpy/sklearn/embedding），离线可跑、原理可讲：
+TF-IDF 是 BM25 前的经典基线，稀疏向量换 numpy/向量库即可上量。演示：
+`python tools/rag_demo.py hnbn666`（建索引 + 语义查询 + 注册成 Agent 可调工具）。
+
+### 3.11 Agent 评估体系（`agents/eval.py` + `tools/compare_runs.py`）
+离线评估"三件套"：**P/R/F1 指标**（召回型任务的量化口径）→ **LLM-as-judge**
+（规则覆盖不了的质量维度，输出强制 JSON `{score, reason}`，可插拔可审计）→
+**回归对比**（`compare_runs.py` 对比两次 golden 报告的 saved/关键词/耗时，
+REGRESSION 退出码 1 供 CI 挂钩）。让"改动是好是坏"从感觉变成数字。
+
 ## 4. 关键工程决策与踩坑
 
 - **规则 12/13（RuiQiCMS 可视化建站）**：纯图产品详情页正文仅 12–16 字，
@@ -113,8 +141,9 @@ tool_calls 与文本标记两种格式，轮次上限防死循环）。所有 LL
 - **S**：中小型企业官网结构差异大（静态 / JS 模板 / 可视化建站），人工清洗效率低。
 - **T**：一套系统自适应任意网站并自动化全流程。
 - **A**：Supervisor 多智能体 + 计划执行审查闭环 + LLM 关键节点介入 + 规则引擎。
-- **R**：hnbn666.cn 全站冒烟 `saved=6 / failed=0`；47 项单元测试全绿；
-  单次运行 26 条 trace 事件完整落盘；站点学习模式二次爬取 100% 命中。
+- **R**：hnbn666.cn 全站冒烟 `saved=6 / failed=0`；117 项单元测试全绿；
+  单次运行 26 条 trace 事件完整落盘；站点学习模式二次爬取 100% 命中；
+  RAG 检索 demo 对落盘页面建索引并命中正确栏目。
 
 ## 6. 快速开始
 
@@ -126,7 +155,10 @@ playwright install chromium          # JS 模板站渲染用
 python -c "import asyncio; from graph.workflow import run_crawler; asyncio.run(run_crawler('https://example.com', max_steps=3000))"
 
 # 单元测试
-python -m pytest tests -q            # 88 passed
+python -m pytest tests -q            # 117 passed
+
+# RAG 检索链路演示（对落盘 HTML 建索引 + 语义查询）
+python tools/rag_demo.py hnbn666
 ```
 
 GUI 入口：`python site_crawler_gui.py`（博宇 · 网站爬取工具）。
@@ -135,13 +167,43 @@ GUI 入口：`python site_crawler_gui.py`（博宇 · 网站爬取工具）。
 
 ```
 ├── agents/          # 能力级 Agent + safety 安全层 + base 抽象 + tools(工具注册)
-│                    #   + budget(成本/重试) + react(FC闭环) + semdedup(RAG去重)
+│                    #   + budget(成本/重试) + react(FC闭环) + semdedup(去重)
+│                    #   + vector_retriever(RAG检索) + eval(评估指标/LLM-judge)
 ├── graph/           # 编排级：workflow(Supervisor) / agents(8 Agent) / nodes(节点逻辑) / state(TypedDict)
-├── tests/           # 88 项单元测试（safety / plan / BaseAgent / 工具 / ReAct / 记账 / 去重 / 图装配冒烟）
-├── tools/           # analyze_trace(trace分析) / golden_check(离线评估集,支持--json)
+├── tests/           # 117 项单元测试（safety / plan / BaseAgent / 工具 / ReAct / 记账
+│                    #   / 去重 / RAG检索 / 评估 / 图装配冒烟）
+├── tools/           # analyze_trace(轨迹分析) / golden_check(离线评估,支持--json)
+│                    #   / compare_runs(回归对比) / rag_demo(RAG检索演示)
 ├── memory.py        # SQLite 长期记忆（visited_urls / site_patterns）
 ├── schemas.py       # Pydantic 模型 + 日志
 ├── .github/         # GitHub Actions CI（多版本 Python 跑 pytest）
 ├── main.py          # 命令行入口
 └── site_crawler_gui.py  # Tkinter GUI
 ```
+
+## 8. English Summary / 外企面试叙事
+
+**boyushixi** is a multi-agent web harvesting system built on LangGraph's
+Supervisor pattern. A coordinator (workflow) orchestrates 8 specialist agents
+(scout → navigate → fetch/extract → evaluate → media → storage) over a
+plan-and-execute loop, using **deterministic rules first, LLM only at critical
+decision points** (cost layering).
+
+Engineering highlights: three-layer prompt-injection defense (isolation +
+strict Pydantic output schema + heuristic veto), cross-run site-pattern memory
+(cold→warm start), full JSONL trace observability, a tool layer with a
+function-calling loop (retry + exponential backoff + token budgeting), and
+lightweight RAG — n-gram Jaccard dedup plus a zero-dependency TF-IDF cosine
+retriever over harvested pages — plus a quantitative eval suite
+(P/R/F1, LLM-as-judge, run-to-run regression diff in CI). 117 unit tests.
+
+**STAR template** (45–60s elevator pitch for English interviews):
+
+> S: Small/medium business sites are wildly heterogeneous (static, JS-templated,
+> WYSIWYG builders); manual cleaning doesn't scale.
+> T: One system that adapts to any site and automates the whole pipeline.
+> A: Supervisor multi-agent graph; plan → execute → review loop; LLM reserved
+> for decisions that need judgment; a rule engine for deterministic extraction;
+> memories, observability, and an offline golden-set eval to prove it.
+> R: End-to-end run on hnbn666.cn: 6/6 sections saved, 0 failures; 117 tests
+> green in CI; second crawl of the same site hit 100% memory reuse.
