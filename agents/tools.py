@@ -1,4 +1,4 @@
-"""agents/tools.py — Tool 层抽象（工具注册 / schema / 执行器）
+"""agents/tools.py — Tool 层抽象（工具注册 / schema / 执行器 / 参数净化）
 
 把爬虫管道的确定性能力封装为可注册、可调用、带 JSON Schema 的"工具集"，
 供 Agent 调用（面试叙事：Agent 不是把逻辑写死，而是通过 ToolRegistry
@@ -13,6 +13,11 @@
   - sanitize_text              不可信文本清理（safety 层）
   - jaccard_similarity         n-gram Jaccard 文本相似度（RAG 语义去重）
   - near_duplicate_pages       批量近重复检测（聚类同一栏目重复页）
+  - quality_judge              确定性质量打分（FC 评估链路）
+
+Tool-Use 安全第一层（sanitize_tool_args）：LLM 生成的工具参数是"半可信"输入
+（可能被注入污染上下文影响），执行前按工具 JSON Schema 统一净化——剥离未知
+字段、字符串截断、类型强制。ToolRegistry.call 内置净化，调用方零改动。
 
 用法:
   tools = ToolRegistry.builtin()
@@ -24,6 +29,57 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Optional
 
 from agents.safety import detect_injection, sanitize_text
+
+# 字符串参数净化默认上限（防超长/注入样本撑爆内存与日志）
+_DEFAULT_MAX_STR_LEN = 4000
+
+
+def sanitize_tool_args(
+    name: str,
+    args: Dict[str, Any],
+    parameters: Dict[str, Any],
+    max_str_len: int = _DEFAULT_MAX_STR_LEN,
+) -> Dict[str, Any]:
+    """按工具 JSON Schema 净化 LLM 传入的工具参数（Tool-Use 安全第一层）。
+
+    风险模型：LLM 决策可能被注入污染的页面内容带偏，生成畸形/超长/未知参数。
+    净化规则（幂等，不抛异常——净化是保险丝不是闸门）：
+      1. 仅保留 schema 声明的字段（剥离未知 key，防意外副作用参数）
+      2. 字符串截断到上限（防超长/注入样本）
+      3. 类型强制：数值解析失败 / 非法类型即剥离
+    """
+    properties = (parameters or {}).get("properties", {}) or {}
+    out: Dict[str, Any] = {}
+    for key, prop in properties.items():
+        if key not in args:
+            continue
+        val = args[key]
+        ptype = prop.get("type", "")
+        if ptype == "string":
+            out[key] = str(val)[:max_str_len]
+        elif ptype == "integer":
+            try:
+                out[key] = int(val)
+            except (TypeError, ValueError):
+                continue
+        elif ptype == "number":
+            try:
+                out[key] = float(val)
+            except (TypeError, ValueError):
+                continue
+        elif ptype == "boolean":
+            out[key] = bool(val)
+        elif ptype == "array":
+            items = prop.get("items", {}) or {}
+            if items.get("type") == "string":
+                out[key] = [str(v)[:max_str_len]
+                            for v in (val if isinstance(val, (list, tuple)) else [])]
+            else:
+                out[key] = val if isinstance(val, (list, tuple)) else []
+        else:
+            # 未知类型（项目内不会出现）→ 原样保留
+            out[key] = val
+    return out
 
 
 class Tool:
@@ -82,10 +138,11 @@ class ToolRegistry:
         return self._tools.get(name)
 
     def call(self, name: str, **kwargs: Any) -> Any:
-        """调用工具；未注册抛 KeyError（快速暴露配置缺失）。"""
+        """调用工具（执行前按 JSON Schema 净化参数）；未注册抛 KeyError。"""
         tool = self._tools.get(name)
         if tool is None:
             raise KeyError(f"未注册的工具: {name} (可用: {sorted(self._tools)})")
+        kwargs = sanitize_tool_args(name, kwargs, tool.parameters)
         return tool(**kwargs)
 
     def all_schemas(self) -> list:

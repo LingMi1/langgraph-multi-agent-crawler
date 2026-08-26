@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from agents.tools import ToolRegistry
+from agents.tools import ToolRegistry, sanitize_tool_args
 
 # 文本式工具调用标记：```tool\n{"name": ..., "arguments": {...}}\n```
 _TEXT_TOOL_RE = re.compile(r"```tool\s*(\{.*?\})\s*```", re.S)
@@ -115,6 +115,15 @@ def _assistant_msg(response: Any, calls: List[ToolCall]) -> Dict[str, Any]:
     }
 
 
+def _preview(obj: Any, limit: int = 120) -> str:
+    """把工具入参/出参压缩为可审计的短摘要（日志友好，防超长内容撑爆审计）。"""
+    try:
+        s = json.dumps(obj, ensure_ascii=False, sort_keys=True, default=str)
+    except Exception:
+        s = str(obj)
+    return s[:limit]
+
+
 class FunctionCallingLoop:
     """ReAct 工具调用循环：LLM 决策 → 执行工具 → 回填 → 收敛。
 
@@ -148,12 +157,36 @@ class FunctionCallingLoop:
             history.append(_assistant_msg(resp, calls))
             results = []
             for c in calls:
+                tool = self._tools.get(c.name)
+                if tool is None:
+                    # 未知/恶意工具名 → 显式拒绝 + 审计（不打断循环，供复核）
+                    self.trace.append({
+                        "round": rnd, "tool": c.name, "status": "unknown_tool",
+                        "error": f"未注册的工具 {c.name!r}",
+                    })
+                    results.append({"id": c.id, "ok": False,
+                                    "output": f"[工具未注册] {c.name}"})
+                    continue
                 try:
-                    out = self._tools.call(c.name, **c.arguments)
+                    # Tool-Use 安全第一层：按 JSON Schema 净化参数（剥离未知 key /
+                    # 截断超长字符串 / 类型强制），再执行
+                    cleaned = sanitize_tool_args(c.name, c.arguments, tool.parameters)
+                    out = tool(**cleaned)
+                    self.trace.append({
+                        "round": rnd, "tool": c.name,
+                        "args_preview": _preview(c.arguments),       # 模型原始请求（审计证据）
+                        "sanitized_preview": _preview(cleaned),      # 净化后实际执行（可复核）
+                        "output_preview": _preview(out), "ok": True,
+                    })
                     results.append({"id": c.id, "ok": True, "output": out})
-                except KeyError as e:
-                    results.append({"id": c.id, "ok": False, "output": f"[工具未注册] {e}"})
-            self.trace.append({"round": rnd, "calls": [c.name for c in calls]})
+                except Exception as e:  # noqa: BLE001 — 工具执行失败必须回填可诊断信息
+                    self.trace.append({
+                        "round": rnd, "tool": c.name,
+                        "args_preview": _preview(c.arguments),
+                        "error": str(e), "ok": False,
+                    })
+                    results.append({"id": c.id, "ok": False,
+                                    "output": f"[工具执行失败] {e}"})
             for r in results:
                 history.append({"role": "tool", "tool_call_id": r["id"],
                                 "content": str(r["output"])})

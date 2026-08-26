@@ -95,7 +95,12 @@ def test_loop_plans_executes_and_converges():
     assert llm.calls == 2
     # 工具结果已回填：第二轮消息里应包含 tool 角色消息
     assert any(m["role"] == "tool" for m in llm.received_messages[1])
-    assert loop.trace == [{"round": 1, "calls": ["double"]}]
+    # FC 审计轨迹：入参/出参摘要落 trace（可复核）
+    assert loop.trace == [{
+        "round": 1, "tool": "double",
+        "args_preview": '{"n": 21}', "sanitized_preview": '{"n": 21}',
+        "output_preview": "42", "ok": True,
+    }]
 
 
 def test_loop_integrates_with_builtin_registry():
@@ -119,6 +124,11 @@ def test_loop_handles_unregistered_tool():
     # 回填的消息中应包含未注册提示
     joined = "".join(m.get("content", "") for m in llm.received_messages[1])
     assert "未注册" in joined
+    # 审计轨迹：未知工具被显式记录（status=unknown_tool）
+    assert loop.trace == [{
+        "round": 1, "tool": "not_exist", "status": "unknown_tool",
+        "error": "未注册的工具 'not_exist'",
+    }]
 
 
 def test_loop_max_rounds_cap():

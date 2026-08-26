@@ -6,7 +6,7 @@
 
 > 面试亮点叙事：Supervisor 模式 + Plan-and-Execute + 提示注入防护 + 经验记忆 +
 > 全轨迹可观测 + 轻量 RAG（语义去重 + 向量检索 + Recall@k/NDCG@k 指标）+ Function Calling 闭环
-> （含质量评估核心链路）+ LLM-as-judge 评估 + 137 项单元测试。传统爬虫确定性为主、LLM 为辅，真实业务问题驱动。
+> （含质量评估核心链路）+ LLM-as-judge 评估 + 152 项单元测试。传统爬虫确定性为主、LLM 为辅，真实业务问题驱动。
 
 ---
 
@@ -48,7 +48,7 @@
 - **解析清洗**：BeautifulSoup4 · trafilatura · 自研规则引擎（4 级封顶 + 连续去重）
 - **数据模型**：Pydantic v2（严格输出 schema 校验）
 - **持久化**：SQLite（URL 去重 / HTML 缓存 / 站点学习模式）+ 本地文件 + CSV
-- **质量保障**：pytest（137 tests）+ JSONL 全轨迹 + Golden Set 离线评估 + LLM-as-judge + GitHub Actions CI
+- **质量保障**：pytest（152 tests）+ JSONL 全轨迹 + Golden Set 离线评估 + LLM-as-judge + GitHub Actions CI
 
 ## 3. 核心设计
 
@@ -94,6 +94,14 @@ ToolRegistry 是"能力声明"，`FunctionCallingLoop` 把链路走通：**LLM �
 解析 tool_calls → 执行 → 结果回填 → 继续推理 → 收敛回答**（支持 OpenAI 结构化
 tool_calls 与文本标记两种格式，轮次上限防死循环）。所有 LLM 调用经 `TrackedLLM`
 统一**重试 + 指数退避 + token 记账**——调用层负责扛模型不稳定，业务代码零改动。
+
+**Tool-Use 安全三件套**（模型的输出不可信，安全边界在工具执行层）：
+1. **参数净化** `sanitize_tool_args`：按工具 JSON Schema 剥离未知 key（防注入参数）、
+   字符串截断到上限、类型强制（数值解析失败即丢弃）；
+2. **FC 审计轨迹**：每轮落 trace 记录 `args_preview`（模型原始请求）与
+   `sanitized_preview`（净化后实际执行）及出参摘要，失败同样留痕，可复核；
+3. **未知工具显式拒绝**：未注册/恶意工具名直接拒绝并审计（`status=unknown_tool`），
+   不打断循环、不落执行。
 
 ### 3.9 多 Agent 协作模式：为什么选 Supervisor
 面试高频题"多 Agent 怎么协作"的选型对照（本项目=单层 Supervisor）：
@@ -163,7 +171,7 @@ playwright install chromium          # JS 模板站渲染用
 python -c "import asyncio; from graph.workflow import run_crawler; asyncio.run(run_crawler('https://example.com', max_steps=3000))"
 
 # 单元测试
-python -m pytest tests -q            # 137 passed
+python -m pytest tests -q            # 152 passed
 
 # RAG 检索链路演示（对落盘 HTML 建索引 + 语义查询）
 python tools/rag_demo.py hnbn666
@@ -206,7 +214,7 @@ retriever over harvested pages (scored with Recall@k / NDCG@k) — plus a
 quantitative eval suite (P/R/F1, LLM-as-judge, run-to-run regression diff in CI),
 where the quality gate itself runs through a function-calling loop
 (LLM invokes a deterministic `quality_judge` tool before emitting its verdict).
-137 unit tests.
+152 unit tests.
 
 **STAR template** (45–60s elevator pitch for English interviews):
 
@@ -216,5 +224,5 @@ where the quality gate itself runs through a function-calling loop
 > A: Supervisor multi-agent graph; plan → execute → review loop; LLM reserved
 > for decisions that need judgment; a rule engine for deterministic extraction;
 > memories, observability, and an offline golden-set eval to prove it.
-> R: End-to-end run on hnbn666.cn: 6/6 sections saved, 0 failures; 137 tests
+> R: End-to-end run on hnbn666.cn: 6/6 sections saved, 0 failures; 152 tests
 > green in CI; second crawl of the same site hit 100% memory reuse.
