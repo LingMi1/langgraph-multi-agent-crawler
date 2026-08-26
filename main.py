@@ -29,7 +29,7 @@ from graph.workflow import run_crawler as run_langgraph_crawler_core
 # ============================================================================
 
 def run_langgraph_crawler(target_url: str,
-                          concurrency: int = 5,
+                          concurrency: int = 10,
                           log_callback: Optional[Callable[[str], None]] = None,
                           reset_memory: bool = False,
                           progress_callback: Optional[Callable[[int, int, str], None]] = None) -> int:
@@ -43,7 +43,7 @@ def run_langgraph_crawler(target_url: str,
 
     Args:
         target_url:    目标网站首页 URL
-        concurrency:   fetch_extract 节点每批并发处理的 URL 数（默认 5）
+        concurrency:   fetch_extract 节点每批并发处理的 URL 数（默认 10）
         log_callback:  日志回调
         reset_memory:  是否重置该站点的 SQLite 记忆
         progress_callback: 进度回调 (fetched, queue_len, url, phase)
@@ -130,8 +130,8 @@ if __name__ == "__main__":
                         help="重置站点记忆（清空 SQLite 中该站点的 URL 缓存和历史记录），白纸启动")
     parser.add_argument("--reset-all", action="store_true", default=False,
                         help="清空全部 SQLite 记忆（所有站点的 URL 缓存），全局重置")
-    parser.add_argument("--concurrency", type=int, default=5,
-                        help="fetch_extract 节点并发数（默认5）")
+    parser.add_argument("--concurrency", type=int, default=10,
+                        help="fetch_extract 节点并发数（默认10）")
     args = parser.parse_args()
 
     if args.reset_all:

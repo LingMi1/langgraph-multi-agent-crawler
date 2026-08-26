@@ -409,7 +409,7 @@ class CrawlerGUI:
 
                 pages = langgraph_main.run_langgraph_crawler(
                     url,
-                    concurrency=5,
+                    concurrency=10,
                     log_callback=self._langgraph_log,
                     reset_memory=False,
                     progress_callback=self._lg_progress,
