@@ -1433,13 +1433,27 @@ async def _process_one_url(
     # 规则解析（面包屑/注册表/吸附）后层级仍无法确定子栏目时，用 LLM 精判归属：
     #   - 详情页（非列表页）才调 LLM，栏目页不烧 token
     #   - 结果按 URL 前缀回写注册表，同前缀兄弟页直接复用
-    if not is_list and nav_names and (len(nav_path) < 2 or nav_path[0] not in set(nav_names)):
-        _llm_nav = await _classify_nav_path_llm(
-            url, page.title or "", nav_path, nav_names
-        )
-        if _llm_nav:
-            nav_path = _llm_nav
-            page.nav_path = list(_llm_nav)
+    if not is_list and nav_names:
+        # ★ URL 语义兜底（JS 动态导航站）：URL 命中 about/contact/news 等语义
+        #   且与规则解析的 nav_path 顶级冲突时覆盖。hnbn666 实测：001_about.html
+        #   被规则塞进"领导视察/客户案例"，URL 语义直接纠正为"关于我们"。
+        _sem_nav = _classify_url_semantics(url, nav_names)
+        if _sem_nav:
+            _sem_nav = _snap_nav_to_registry(url, _sem_nav)
+            if _sem_nav and _sem_nav[0] != (nav_path[0] if nav_path else ""):
+                agent_logger.info(
+                    f"[Graph::nav_classify] URL 语义覆盖: {_sem_nav} "
+                    f"(原 {nav_path[:2]}) | {url[:70]}"
+                )
+                nav_path = _sem_nav
+                page.nav_path = list(_sem_nav)
+        if len(nav_path) < 2 or nav_path[0] not in set(nav_names):
+            _llm_nav = await _classify_nav_path_llm(
+                url, page.title or "", nav_path, nav_names
+            )
+            if _llm_nav:
+                nav_path = _llm_nav
+                page.nav_path = list(_llm_nav)
 
     # ── 详情页: 清洗 ──
     # 优先使用 LLM 生成的规则（如果存在），否则使用默认 trafilatura/BS4 管道
@@ -2868,6 +2882,33 @@ _CONTENT_SAFE_KW = re.compile(
 )
 
 
+# ★ 联系方式确定性删除（对齐博宇清洗规则，不依赖 LLM）
+#   背景：清洗提示词的"删联系方式"只在 LLM 清洗时生效，而 ADAPTIVE_LLM_CLEAN 默认 off，
+#   全站走规则清洗路径 → hnbn666 实测"法人/电话/办公电话/公司地址"整段残留。
+#   这里按「联系方式词[:：]开头 + 短节点（<100 字）」整段删除，长度保护防误删长正文。
+_CONTACT_LEAD_RE = re.compile(
+    r"^\s*(?:\d{1,2}[、.．)\]]?\s*)?(?:联系电话|办公电话|移动电话|固定电话|客服电话|服务热线|"
+    r"电话|手机号|手机|传真|邮箱|电子邮箱|E-mail|Email|e_mail|"
+    r"网址|官网|官方网址|网站地址|微信|微信号|微信二维码|QQ|"
+    r"联\s*系\s*人|联系人|法人|法人代表|公司地址|地址|通讯地址|联系地址|"
+    r"邮政编码|邮编)\s*[:：]\s*.+",
+    re.I,
+)
+
+
+def _strip_contact_nodes(content) -> None:
+    """删除整段是联系方式的短节点（<p>/<div>/<li>/<td>）。仅匹配
+    「联系方式关键词[:：]」开头的短文本节点，防误删正文长句。"""
+    if content is None:
+        return
+    for el in list(content.find_all(["p", "div", "li", "td", "span"])):
+        text = el.get_text(" ", strip=True)
+        if not text or len(text) > 100:
+            continue
+        if _CONTACT_LEAD_RE.match(text):
+            el.decompose()
+
+
 def _is_noise_block(el) -> bool:
     """判断一个元素是否为噪音块（页脚/联系方式等）"""
     if not hasattr(el, 'name'):
@@ -3236,6 +3277,59 @@ def _title_snap_nav(page_title: str, nav_names: Set[str]) -> Optional[List[str]]
 
 # ★ LLM 导航分类缓存（URL → nav_path），避免重复调用
 _LLM_NAV_CACHE: Dict[str, List[str]] = {}
+
+
+# ★ URL 语义 → 候选一级栏目名（JS 动态导航站兜底）
+#   背景：hnbn666 等站顶部菜单是 JS 渲染，静态抓取拿不到完整菜单 → 规则/LLM 分类
+#   只能从正文链接猜栏目，"关于我们"(001_about.html) 被塞进"领导视察/客户案例"。
+#   URL 本身是权威锚点：命中 about/contact/news/product 等语义段时直接归类，
+#   优先映射到候选一级栏目名；候选无匹配则用标准语义名（比塞进错误栏目好）。
+_URL_SEMANTIC_MAP = [
+    (("about",), ["关于我们", "公司简介", "企业简介", "集团简介", "公司概况", "走进我们", "关于"]),
+    (("contact", "lianxi", "message", "liuyan"), ["联系我们", "联系方式", "联系"]),
+    (("product", "goods", "chanpin", "shop", "products"), ["产品中心", "产品展示", "品牌产品", "产品介绍", "产品"]),
+    (("news", "xinwen", "article", "newshow", "news_show", "newsinfo", "newxx", "zixun"),
+     ["新闻中心", "新闻资讯", "资讯中心", "新闻动态", "企业动态", "行业动态", "资讯"]),
+    (("case", "anli", "project", "xiangmu", "works", "chenggonganli"),
+     ["客户案例", "工程案例", "成功案例", "项目案例", "工程", "案例"]),
+    (("join", "job", "recruit", "zhaopin", "rencai", "hr", "talent"),
+     ["人才招聘", "招聘", "招贤纳士", "加入我们", "人力资源"]),
+    (("honor", "rongyu", "cert", "zizhi", "rongyuzizhi"),
+     ["荣誉资质", "资质荣誉", "企业荣誉", "荣誉展示", "荣誉"]),
+    (("culture", "wenhua", "linian", "jiazhi"), ["企业文化", "企业理念", "公司文化", "文化"]),
+    (("party", "dangjian", "dangqun", "dangzhi", "dang"),
+     ["党群工作", "党建工作", "党群", "党建"]),
+    (("service", "fuwu", "support", "kehu"), ["客户服务", "服务体系", "服务支持", "服务"]),
+    (("download", "xiazai", "down", "ziliao"), ["资料下载", "下载中心", "下载"]),
+]
+
+
+def _classify_url_semantics(url: str, nav_names: List[str]) -> Optional[List[str]]:
+    """确定性 URL 语义分类：URL 段命中 about/contact/news/product 等语义时，
+    映射到候选一级栏目名（优先 nav_names 中的名字），否则返回标准语义名。"""
+    if not url:
+        return None
+    try:
+        from urllib.parse import urlparse
+        path = urlparse(url).path or ""
+    except Exception:
+        return None
+    segs = [s.lower() for s in re.split(r"[/_.\-]", path) if s and s not in ("index", "html", "htm", "php", "asp", "aspx", "jsp")]
+    if not segs:
+        return None
+    candidates = None
+    for keys, cands in _URL_SEMANTIC_MAP:
+        if any(any(k in s for s in segs) for k in keys):
+            candidates = cands
+            break
+    if not candidates:
+        return None
+    # 优先匹配候选一级栏目名（nav_names 是首页导航锚文本，站点作者定义的真实栏目名）
+    for cand in candidates:
+        for n in nav_names:
+            if cand in n or n in cand:
+                return [n]
+    return [candidates[0]]
 
 
 async def _classify_nav_path_llm(
@@ -3832,6 +3926,12 @@ def _build_structured_content(rescued_html: str, page_url: str = "", content_sel
             # 如果父元素变空，也删掉
             if parent and hasattr(parent, 'name') and not parent.get_text(strip=True):
                 parent.decompose()
+
+    # ── 3.5 联系方式确定性删除（对齐博宇清洗规则，不依赖 LLM）──
+    #   hnbn666 实测：电话/办公电话/公司地址独立段落残留（_is_noise_block 有
+    #   len<20 短路，短联系方式段落漏删）。这里按「联系方式词[:：]开头 + 短节点」
+    #   整段删除，长度保护防误删长正文。
+    _strip_contact_nodes(content)
 
     # ── 4. 内容区内：<a> → <span> ──
     for a in list(content.find_all("a")):
