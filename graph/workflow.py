@@ -258,6 +258,14 @@ async def run_crawler(
             f"栏目={len(plan.get('expected_sections') or [])} | 状态={plan.get('status')}")
     if error:
         log(f"  ⚠️ 错误:    {error}")
+    # ★ 成本记账：汇总本次运行的 LLM 调用与 token 估算
+    try:
+        from graph.nodes import get_budget_summary
+        budget = get_budget_summary()
+        if budget:
+            log(f"  💰 Token预算: {budget}")
+    except Exception:
+        pass
     if ctx.trace.path:
         log(f"  🧭 多Agent轨迹: {ctx.trace.path}")
     log(f"{'='*50}")

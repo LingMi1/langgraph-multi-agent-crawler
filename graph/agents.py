@@ -23,6 +23,7 @@ graph/agents.py — 编排级 Agent 实现（Supervisor 多智能体模式）
 from __future__ import annotations
 
 from typing import Any, Dict, List
+from urllib.parse import urlparse
 
 from agents.base import AgentContext, BaseAgent
 from .state import CrawlerState
@@ -89,7 +90,7 @@ def _review_plan(plan: Dict[str, Any], evaluation: Dict[str, Any],
     passed = bool(evaluation.get("passed")) if evaluation else bool(pending) is False
 
     quality_gap = ""
-    if not passed:
+    if not passed and evaluation:
         issues = evaluation.get("issues") or []
         quality_gap = ";".join(
             str(i.get("type", "")) for i in issues[:3]
@@ -122,8 +123,50 @@ class ScoutAgent(BaseAgent):
         if result.get("error"):
             return result
         profile = result.get("site_profile") or {}
+
+        # ★ 经验记忆：历史学习过该站点 → 用记忆修正画像（站点类型 / JS / 模板特征），
+        #   避免重复分析，也让跨 run 配置更稳定（冷启动 → 热启动）。
+        memory = getattr(self.ctx, "memory", None)
+        if memory is not None:
+            netloc = urlparse(state.get("seed_url", "")).netloc
+            pattern = memory.get_site_pattern(netloc)
+            if pattern and pattern.get("site_type"):
+                profile = {
+                    **profile,
+                    "site_type": pattern["site_type"],
+                    "needs_js_render": pattern["needs_js_render"],
+                    "extra": {
+                        **profile.get("extra", {}),
+                        "memory_template_hints": pattern.get("template_hints", []),
+                    },
+                }
+                agent_logger.info(
+                    f"[Agent::scout] 经验记忆命中 | {netloc} | "
+                    f"type={pattern['site_type']} | js={pattern['needs_js_render']}"
+                )
+                self.trace.record(
+                    self.name, "memory_hit",
+                    netloc=netloc,
+                    site_type=pattern["site_type"],
+                    template_hints=pattern.get("template_hints", []),
+                )
+
         plan = _derive_plan(profile, [])
         result["plan"] = plan
+        result["site_profile"] = profile
+
+        # ★ Tool 层：通过工具注册表调用注入弱检测（标题是不可信数据，真实使用）
+        try:
+            title = str(profile.get("title", ""))
+            hint = self.ctx.tools.call("detect_injection", content=title)
+            if hint:
+                agent_logger.warning(f"[Agent::scout] 种子标题疑似注入提示: {hint!r}")
+            self.trace.record(
+                self.name, "tool_call",
+                tool="detect_injection", hit=bool(hint), tools=self.ctx.tools.names(),
+            )
+        except Exception as e:
+            agent_logger.warning(f"[Agent::scout] 工具调用失败: {e}")
         self.trace.record(
             self.name, "plan",
             site_type=plan["site_type"],
@@ -347,6 +390,29 @@ class StorageAgent(BaseAgent):
             self.name, "store",
             stats={k: stats.get(k) for k in ("saved", "skipped", "duplicate", "failed")},
         )
+        # ★ 经验记忆：成功爬完 → 写入站点学习模式，供同站点下次侦察直接命中复用
+        if stats.get("saved", 0) > 0:
+            try:
+                memory = self.ctx.memory
+                netloc = urlparse(state.get("seed_url", "")).netloc
+                plan = state.get("plan") or {}
+                memory.save_site_pattern(
+                    netloc=netloc,
+                    site_type=str(plan.get("site_type", "")),
+                    needs_js_render=bool(plan.get("needs_js_render", False)),
+                    template_hints=list(plan.get("template_hints") or []),
+                    stats={k: stats.get(k) for k in ("saved", "skipped", "duplicate", "failed")},
+                )
+                self.trace.record(
+                    self.name, "memory_save",
+                    netloc=netloc, saved=stats.get("saved", 0),
+                )
+                agent_logger.info(
+                    f"[Agent::storage] 站点学习模式已写入 | {netloc} | "
+                    f"saved={stats.get('saved', 0)}"
+                )
+            except Exception as e:
+                agent_logger.warning(f"[StorageAgent] 保存站点模式失败: {e}")
         return result
 
     def _summarize_decision(self, result: Dict[str, Any]) -> str:

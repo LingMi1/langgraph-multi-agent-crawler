@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: 单元测试（safety / plan / BaseAgent / 工具 / 记账 / ReAct / 去重 / 图装配冒烟）
+        run: python -m pytest tests -q
+
+      - name: Trace 分析器冒烟
+        run: python -c "import ast,sys; ast.parse(open('tools/analyze_trace.py',encoding='utf-8').read())"
+
+      - name: Golden 清单校验
+        run: python tools/golden_check.py --list

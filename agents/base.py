@@ -32,6 +32,8 @@ from typing import Any, Dict, Optional
 
 from schemas import agent_logger
 from memory import UrlMemory
+from agents.budget import TokenBudget
+from agents.tools import ToolRegistry
 
 
 # ============================================================================
@@ -97,17 +99,22 @@ class TraceRecorder:
 # ============================================================================
 
 class AgentContext:
-    """Agent 运行时共享上下文：轨迹记录器 + 可选 LLM 客户端 + 共享记忆。"""
+    """Agent 运行时共享上下文：轨迹记录器 + 可选 LLM 客户端 + 共享记忆 + 工具集 + 成本账。"""
 
     def __init__(
         self,
         trace: Optional[TraceRecorder] = None,
         llm: Any = None,
         memory: Optional[UrlMemory] = None,
+        tools: Any = None,
+        budget: Any = None,
     ):
         self.trace = trace or TraceRecorder()
         self.llm = llm
         self.memory = memory or UrlMemory()
+        # Tool 层：工具注册表（默认内置工具集）；budget：LLM 成本记账
+        self.tools = tools if tools is not None else ToolRegistry.builtin()
+        self.budget = budget if budget is not None else TokenBudget()
 
 
 # ============================================================================

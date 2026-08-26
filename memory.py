@@ -82,6 +82,19 @@ class UrlMemory:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_url ON visited_urls(url)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_session ON agent_sessions(session_id)")
+            # ★ 经验记忆：站点学习模式表（ScoutAgent 命中复用 → 冷启动变热启动）
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS site_patterns (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    netloc TEXT UNIQUE NOT NULL,
+                    site_type TEXT DEFAULT '',
+                    needs_js_render INTEGER DEFAULT 0,
+                    template_hints TEXT DEFAULT '[]',
+                    stats_json TEXT DEFAULT '{}',
+                    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_pattern ON site_patterns(netloc)")
             conn.commit()
             conn.close()
             self._initialized = True
@@ -315,6 +328,75 @@ class UrlMemory:
     def close(self):
         """关闭数据库连接（SQLite 自动管理，此方法预留）"""
         pass
+
+    # ==================================================================
+    # ★ 经验记忆：站点学习模式（site_patterns）
+    #   ScoutAgent 首次侦察后写入，同站点二次爬取直接命中复用，
+    #   避免重复做站点类型 / JS 渲染 / 模板特征分析。
+    # ==================================================================
+
+    def get_site_pattern(self, netloc: str) -> Optional[Dict[str, Any]]:
+        """读取站点历史学习模式；未学习过返回 None。"""
+        self._init_db()
+        with _MEMORY_LOCK:
+            conn = sqlite3.connect(self._db_path)
+            cursor = conn.execute(
+                "SELECT site_type, needs_js_render, template_hints, stats_json, updated_at "
+                "FROM site_patterns WHERE netloc = ? LIMIT 1",
+                (netloc,),
+            )
+            row = cursor.fetchone()
+            conn.close()
+        if not row:
+            return None
+        try:
+            return {
+                "site_type": row[0] or "",
+                "needs_js_render": bool(row[1]),
+                "template_hints": json.loads(row[2]) if row[2] else [],
+                "stats": json.loads(row[3]) if row[3] else {},
+                "updated_at": row[4],
+            }
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+    def save_site_pattern(self, netloc: str, site_type: str = "",
+                          needs_js_render: bool = False,
+                          template_hints: Optional[List[str]] = None,
+                          stats: Optional[Dict[str, int]] = None) -> None:
+        """写入 / 刷新站点学习模式（INSERT OR REPLACE，按 netloc 幂等）。"""
+        self._init_db()
+        with _MEMORY_LOCK:
+            try:
+                conn = sqlite3.connect(self._db_path)
+                conn.execute(
+                    "INSERT OR REPLACE INTO site_patterns "
+                    "(netloc, site_type, needs_js_render, template_hints, stats_json, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))",
+                    (
+                        netloc,
+                        site_type,
+                        1 if needs_js_render else 0,
+                        json.dumps(template_hints or [], ensure_ascii=False),
+                        json.dumps(stats or {}, ensure_ascii=False),
+                    ),
+                )
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                agent_logger.warning(f"UrlMemory.save_site_pattern 失败: {e}")
+
+    def delete_site_pattern(self, netloc: str) -> None:
+        """删除站点的学习模式（站点结构大改后可重置）。"""
+        self._init_db()
+        with _MEMORY_LOCK:
+            try:
+                conn = sqlite3.connect(self._db_path)
+                conn.execute("DELETE FROM site_patterns WHERE netloc = ?", (netloc,))
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                agent_logger.warning(f"UrlMemory.delete_site_pattern 失败: {e}")
 
     # ==================================================================
     # ★ 重置入口：清空脏历史，实现"白纸启动"
