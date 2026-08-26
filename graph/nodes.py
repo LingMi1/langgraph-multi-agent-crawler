@@ -1550,6 +1550,12 @@ async def _process_one_url(
 
     # ── 详情页: 清洗 ──
     # 优先使用 LLM 生成的规则（如果存在），否则使用默认 trafilatura/BS4 管道
+    # ★ 规则 13：纯图片产品详情页强信号（RuiQiCMS 等可视化建站，如 hnbn666 产品页）。
+    #   product_content_title 是详情页标题容器（列表页用 rzq:product 模板占位不含它）。
+    #   必须基于 rescued_html 在 extractor.extract 之前计算一次、全程复用：
+    #   extract 会把 page.html 替换成 trafilatura 产物、product_content_title 被剥离，
+    #   且 llm_selector 跳过 / 正文过短拦截 / detail 校验多处需要同一判定。
+    _pure_img_detail = _is_pure_image_product_detail(rescued_html or page.html)
     if extraction_rules:
         agent_logger.info(f"[Graph::fetch_extract] 使用 LLM 定制规则提取")
         loop = asyncio.get_running_loop()
@@ -1577,8 +1583,7 @@ async def _process_one_url(
             # ★ 规则 13：纯图片产品详情页（RuiQiCMS 产品详情只有标题+图）强制走 BS4——
             #   trafilatura 会剥掉 product_content_title 标题和产品图（只剩导航噪音），
             #   BS4 保留标题容器+图片，落盘才有价值。
-            _rule13_bs4 = _is_pure_image_product_detail(rescued_html or page.html)
-            if is_list or _rule13_bs4:
+            if is_list or _pure_img_detail:
                 # ★ 列表页/栏目页提速：跳过 extractor 的 LLM 深降级（列表页无需精确正文，
                 #   trafilatura+BS4 低置信度时直接调 LLM 每页十几秒且烧 token），改用 BS4 清洗。
                 cleaned_html, text_content, _, _ = await loop.run_in_executor(
@@ -1595,7 +1600,7 @@ async def _process_one_url(
                     is_list_page_detected_at_extract=(len(text_content or "") < 50),
                 )
                 agent_logger.info(
-                    f"[Graph::fetch_extract] {'规则13纯图详情页' if _rule13_bs4 else '列表页'}使用 BS4 清洗(跳过 LLM 深降级) | {url[:60]}"
+                    f"[Graph::fetch_extract] {'规则13纯图详情页' if _pure_img_detail else '列表页'}使用 BS4 清洗(跳过 LLM 深降级) | {url[:60]}"
                 )
             else:
                 cleaned = await extractor.extract(page, profile)
@@ -1644,12 +1649,17 @@ async def _process_one_url(
     # ★ BFS+LLM 整合：详情页用两段式 LLM 定位正文容器（URL 形态模板缓存，同站同模板只调一次 LLM），
     #   列表页/栏目页保持代码启发式（BS4），速度不受影响
     llm_selector = ""
-    if not is_list:
+    # ★ 规则 13：纯图片产品详情页跳过 LLM 选择器——正文容器确定是 .product_content
+    #   （含 product_content_title 标题 + product_content_img/procontent 产品图）。
+    #   _find_main_content 的 content_kw 含 container，会把可视化模块容器当候选，
+    #   曾错选全局轮播 banner 模块，产品标题/产品图全丢（落盘只剩轮播图+Previous/Next）。
+    if not is_list and not _pure_img_detail:
         llm_selector = await _llm_locate_content_selector(
             rescued_html, url, seed_url, site_name
         )
     structured_body = _build_structured_content(
-        rescued_html, url, content_selector=llm_selector
+        rescued_html, url,
+        content_selector=".product_content" if _pure_img_detail else llm_selector
     )
 
     # ── 页面性质判定：二维码聚合页 / 功能页（联系、招聘、留言等）──
@@ -1732,9 +1742,8 @@ async def _process_one_url(
     _check_text = re.sub(r'\s+', '', _check_text)  # 基于最终正文（升级可能替换过）重新计算
     # ★ 规则 13：纯图片产品详情页（RuiQiCMS 产品详情只有标题+图、无文字描述，
     #   text 仅 12-16 字）→ 放行正文过短/纯图页拦截，正常落盘。
-    #   信号必须查 rescued_html（清洗前原始 HTML）：extractor.extract 会把
-    #   page.html 替换成 trafilatura 产物，product_content_title 已被剥离。
-    _pure_img_detail = _is_pure_image_product_detail(rescued_html or page.html or structured_body)
+    #   _pure_img_detail 已在清洗前基于 rescued_html 计算（extractor.extract 会把
+    #   page.html 替换成 trafilatura 产物，product_content_title 已被剥离）。
     if (len(_check_text) < 80 or ((_is_qr_page or _is_func_page) and len(_check_text) < 200)) and not _pure_img_detail:
         _drop_tag = '/二维码聚合页' if _is_qr_page else ('/功能页' if _is_func_page else '')
         agent_logger.info(
