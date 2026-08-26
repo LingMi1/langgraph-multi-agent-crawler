@@ -15,8 +15,9 @@ judge 可插拔：传入任意 `judge_fn(system_prompt, user_content) -> str`，
 from __future__ import annotations
 
 import json
+import math
 import re
-from typing import Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Sequence, Set
 
 # ── 1. 规则指标 ──
 
@@ -36,6 +37,77 @@ def compute_prf(expected: int, actual: int, overlap: int) -> Dict[str, float]:
         "recall": round(recall, 4),
         "f1": round(f1, 4),
     }
+
+
+def heuristic_score(text: str, criteria: str = "") -> Dict[str, Any]:
+    """确定性质量打分（`quality_judge` 工具的执行器，供 FC 评估裁决取"客观事实"）。
+
+    信号：正文长度 / 链接密度 / 图片完整性，返回 0~1 分 + 理由列表。
+    与模型无关、可离线测试——LLM 在 FC 循环里调用它拿到客观分后再做裁决，
+    避免"LLM 凭感觉打分"无法复核。
+    """
+    t = (text or "").strip()
+    text_len = len(t)
+    links = len(re.findall(r"<a\b", t, re.I))
+    imgs = len(re.findall(r"<img\b", t, re.I))
+
+    score = 0.0
+    reasons: list = []
+    if text_len >= 1500:
+        score += 0.5
+        reasons.append("正文充足")
+    elif text_len >= 300:
+        score += 0.3
+        reasons.append("正文一般")
+    else:
+        score += 0.1
+        reasons.append("正文过短")
+    if 1 <= links <= 20:
+        score += 0.2
+        reasons.append("链接密度正常")
+    elif links == 0:
+        score += 0.1
+        reasons.append("无链接")
+    else:
+        reasons.append("链接过多")
+    if imgs >= 2:
+        score += 0.2
+        reasons.append("图片完整")
+    elif imgs == 1:
+        score += 0.1
+    else:
+        reasons.append("无图片")
+    return {"score": round(min(1.0, score), 2), "reasons": reasons, "text_len": text_len}
+
+
+# ── 1.5 RAG 检索质量指标 ──
+
+
+def recall_at_k(ranked_ids: Sequence[int], relevant_ids: Set[int], k: int) -> float:
+    """检索质量：前 k 个结果中相关文档占比（相关文档全集为分母）。
+
+    - ranked_ids:   检索排序后的文档 id 列表
+    - relevant_ids: 与查询相关的文档 id 集合（人工标注）
+    - 无相关文档时定义为 0（不可评估 → 不虚高）
+    """
+    if not relevant_ids:
+        return 0.0
+    hit = len({d for d in ranked_ids[:k]} & relevant_ids)
+    return hit / len(relevant_ids)
+
+
+def ndcg_at_k(ranked_ids: Sequence[int], relevant_ids: Set[int], k: int) -> float:
+    """检索质量：NDCG@k（位置感知，靠前的相关文档得分更高）。
+
+    无相关文档时返回 0.0；k 超过列表长度按列表长度截断。
+    """
+    if not relevant_ids:
+        return 0.0
+    ranked = list(ranked_ids[:k])
+    rel = [1 if d in relevant_ids else 0 for d in ranked]
+    dcg = sum(r / math.log2(i + 2) for i, r in enumerate(rel))
+    ideal = sum(1.0 / math.log2(i + 2) for i in range(min(len(relevant_ids), k)))
+    return round(dcg / ideal, 4) if ideal else 0.0
 
 
 # ── 2. LLM-as-judge ──

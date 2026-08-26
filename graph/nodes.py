@@ -1887,27 +1887,40 @@ async def evaluate_node(state: CrawlerState) -> dict:
     llm = _get_llm()
     # ★ 先跑启发式：作为 LLM 结论的冲突降权护栏（提示注入防护第三层）
     heuristic = _heuristic_evaluate(results, stats)
+    eval_source = "heuristic"
     if llm is None:
         agent_logger.info("[Graph::evaluate] 无 LLM，使用启发式评估")
         evaluation = heuristic
     else:
         try:
-            evaluation = await _llm_evaluate(llm, results, stats, site_name, seed_url)
+            # ★ FC 优先：LLM 决策调用 quality_judge 工具拿客观分再裁决——
+            #   核心链路真实 tool-calling（ReAct 循环），模型不支持时自动降级。
+            fc_eval = await _llm_evaluate_fc(llm, results, stats, site_name, seed_url)
+            if fc_eval is not None:
+                evaluation, eval_source = fc_eval, "llm_fc"
+                agent_logger.info("[Graph::evaluate] FC 工具裁决路径生效 (source=llm_fc)")
+            else:
+                evaluation, eval_source = (
+                    await _llm_evaluate(llm, results, stats, site_name, seed_url),
+                    "llm_text",
+                )
             # ★ 冲突降权：LLM 通过但启发式强烈反对（saved=0 + failed高）→ 以启发式为护栏
             from agents.safety import guard_llm_verdict
             evaluation = guard_llm_verdict(evaluation, heuristic)
         except Exception as e:
             agent_logger.warning(f"[Graph::evaluate] LLM 评估失败: {e}，降级为启发式")
             evaluation = heuristic
+            eval_source = "heuristic"
 
     agent_logger.info(
         f"[Graph::evaluate] passed={evaluation.passed} | score={evaluation.score:.2f} | "
-        f"adjustment_count={adjustment_count} | {evaluation.summary}"
+        f"source={eval_source} | adjustment_count={adjustment_count} | {evaluation.summary}"
     )
 
     return {
         "evaluation": evaluation.model_dump(),
         "adjustment_count": adjustment_count,  # 不在这里递增
+        "eval_source": eval_source,  # heuristic / llm_text / llm_fc（可观测）
     }
 
 
@@ -5112,11 +5125,9 @@ def _write_csv_sync(csv_path: str, rows: List[Dict[str, str]]) -> None:
 # LLM 评估实现
 # ============================================================================
 
-async def _llm_evaluate(llm, results: List[Dict], stats: Dict,
-                        site_name: str, seed_url: str) -> EvaluationResult:
-    """使用 LLM 评估爬取结果质量"""
-
-    # 构建评估上下文（摘要，不发送完整 HTML）
+def _build_eval_context(results: List[Dict], stats: Dict,
+                        site_name: str, seed_url: str) -> str:
+    """构建评估上下文（只发摘要，不发送完整 HTML；标题做注入防护清洗）。"""
     saved_count = stats.get("saved", 0)
     failed_count = stats.get("failed", 0)
     skipped_count = stats.get("skipped", 0)
@@ -5136,11 +5147,83 @@ async def _llm_evaluate(llm, results: List[Dict], stats: Dict,
             f"ywlx={sanitize_text(row.get('ywlx', ''), 20)}"
         )
 
-    context = (
+    return (
         f"站点: {site_name} ({seed_url})\n"
         f"统计: 保存={saved_count}, 失败={failed_count}, 跳过={skipped_count}, 重复={dup_count}\n"
         f"前 {len(page_summaries)} 条结果摘要:\n" + "\n".join(page_summaries)
     )
+
+
+async def _llm_evaluate_fc(llm, results: List[Dict], stats: Dict,
+                           site_name: str, seed_url: str):
+    """FC 工具裁决路径：LLM 决策调用 `quality_judge` 工具拿客观分，再输出评估 JSON。
+
+    这是"核心链路真实 tool-calling"的落地点——评估节点不再是 LLM 单点输出，
+    而是 **LLM 决策 → 调用确定性工具 → 结果回填 → 收敛裁决** 的 ReAct 循环。
+    工具结果由 `agents.eval.heuristic_score` 给出（与模型无关、可复核）。
+
+    返回 EvaluationResult；模型不支持工具标记 / 输出无法解析 / 任何异常
+    → 返回 None，调用方降级到纯文本评估（评估是增强，不能炸链路）。
+    """
+    try:
+        from agents.react import FunctionCallingLoop
+        from agents.tools import ToolRegistry, quality_judge_tool
+
+        context = _build_eval_context(results, stats, site_name, seed_url)
+        reg = ToolRegistry()
+        reg.register(quality_judge_tool())
+
+        system = (
+            "你是爬虫质量评估专家。你有一个 quality_judge 工具，可对样本做确定性打分"
+            "（正文长度/链接密度/图片），拿到客观分后再给出最终评估。\n"
+            "需要客观依据时，用如下文本标记调用工具（只调用一次）：\n"
+            '```tool\n{"name": "quality_judge", "arguments": {"sample": "待评估样本"}}\n```\n'
+            "收到工具分值后，输出最终评估 JSON（不要再调用工具）。"
+        )
+        criteria = (
+            "- saved≥3 且失败率<30% 且大部分页面 text_len>500 → passed=true, score≥0.8\n"
+            "- 大量 404/空页 → 反爬或列表误判\n"
+            "- 所有页面同一内容 → 反爬统一样式页\n"
+            "- 参考 quality_judge 返回的客观分：正文过短/无图片会拉低质量分"
+        )
+        user = f"{context}\n\n评估标准:\n{criteria}\n\n输出 JSON："
+        user += (
+            '{"passed": true或false, "score": 0到1, "summary": "...", '
+            '"issues": [{"type": "anti_crawl|content_quality|image_missing|coverage|other", '
+            '"severity": "info|warning|critical", "description": "...", "affected_pages": N}]}'
+        )
+
+        loop = FunctionCallingLoop(llm, reg, max_rounds=3)
+        out = await loop.run([{"role": "user", "content": user}], system=system)
+        answer = out.get("answer")
+        if not answer:
+            return None
+
+        data = _parse_eval_json(answer)
+        if data is None:
+            return None
+        return EvaluationResult(**data)
+    except Exception as e:  # noqa: BLE001 — 增强路径失败必须静默降级
+        agent_logger.warning(f"[Graph::evaluate] FC 工具裁决失败: {e}")
+        return None
+
+
+def _parse_eval_json(text: str):
+    """容错解析评估 JSON（剥离 markdown 围栏；失败返回 None）。"""
+    import json
+    cleaned = (text or "").strip()
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        return None
+
+
+async def _llm_evaluate(llm, results: List[Dict], stats: Dict,
+                        site_name: str, seed_url: str) -> EvaluationResult:
+    """使用 LLM 评估爬取结果质量"""
+
+    context = _build_eval_context(results, stats, site_name, seed_url)
 
     prompt = f"""你是一个爬虫质量评估专家。请评估以下爬取结果的质量。
 

@@ -20,7 +20,7 @@ def test_builtin_tools_registered():
     assert set(reg.names()) == {
         "url_key", "md5", "is_pagination_url",
         "is_pure_image_product_detail", "detect_injection", "sanitize_text",
-        "jaccard_similarity", "near_duplicate_pages",
+        "jaccard_similarity", "near_duplicate_pages", "quality_judge",
     }
 
 

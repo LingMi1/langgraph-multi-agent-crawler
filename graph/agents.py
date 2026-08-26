@@ -272,6 +272,7 @@ class EvaluateAgent(BaseAgent):
         review = _review_plan(plan, evaluation, stats)
         self.trace.record(
             self.name, "review",
+            source=result.get("eval_source", "?"),
             passed=evaluation.get("passed"),
             score=evaluation.get("score"),
             issue_types=[str(i.get("type", "")) for i in (evaluation.get("issues") or [])][:5],
@@ -280,9 +281,9 @@ class EvaluateAgent(BaseAgent):
             quality_gap=review["quality_gap"],
         )
         agent_logger.info(
-            f"[Agent::evaluate] 审查结论 | passed={review['passed']} | "
-            f"score={evaluation.get('score')} | 待完成={review['pending']} | "
-            f"gap={review['quality_gap'] or '-'}"
+            f"[Agent::evaluate] 审查结论 | source={result.get('eval_source', '?')} | "
+            f"passed={review['passed']} | score={evaluation.get('score')} | "
+            f"待完成={review['pending']} | gap={review['quality_gap'] or '-'}"
         )
         return result
 

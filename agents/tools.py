@@ -51,6 +51,24 @@ class Tool:
         return self.executor(**kwargs)
 
 
+def quality_judge_tool() -> Tool:
+    """`quality_judge` 工具：确定性质量打分（FC 评估路径与 builtin 共用）。"""
+    from agents.eval import heuristic_score
+
+    return Tool(
+        "quality_judge", "对样本做确定性质量打分（正文长度/链接密度/图片，0~1 分+理由）",
+        {
+            "type": "object",
+            "properties": {
+                "sample": {"type": "string"},
+                "criteria": {"type": "string", "default": ""},
+            },
+            "required": ["sample"],
+        },
+        lambda sample, criteria="": heuristic_score(sample, criteria),
+    )
+
+
 class ToolRegistry:
     """工具注册表：注册 / 查询 / 调用 / 导出 schema。"""
 
@@ -162,4 +180,6 @@ class ToolRegistry:
             },
             near_duplicate_pages,
         ))
+
+        reg.register(quality_judge_tool())
         return reg

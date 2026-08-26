@@ -1,11 +1,69 @@
-"""tests/test_eval.py — Agent 评估体系：P/R/F1 + LLM-as-judge 单元测试。"""
+"""tests/test_eval.py — Agent 评估体系：P/R/F1 + 确定性打分 + 检索指标 + LLM-as-judge。"""
 
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agents.eval import compute_prf, llm_judge, parse_judge_json
+from agents.eval import (
+    compute_prf,
+    heuristic_score,
+    llm_judge,
+    ndcg_at_k,
+    parse_judge_json,
+    recall_at_k,
+)
+
+
+class TestHeuristicScore:
+    def test_rich_page(self):
+        text = "<p>" + "花生油压榨工艺介绍。" * 400 + "</p><a href='/a'>x</a><img src='i1'><img src='i2'>"
+        r = heuristic_score(text)
+        assert r["score"] == 0.9  # 0.5 正文充足 + 0.2 链接正常 + 0.2 图片完整
+
+    def test_empty(self):
+        r = heuristic_score("")
+        assert r["score"] == 0.2  # 0.1 正文过短 + 0.1 无链接 + 0 图片
+        assert r["text_len"] == 0
+
+    def test_short_no_image(self):
+        r = heuristic_score("短文" * 200)  # 400 字符 → 正文一般
+        assert r["score"] == 0.4  # 0.3 正文一般 + 0.1 无链接 + 0 图片
+        assert "正文一般" in r["reasons"]
+
+    def test_too_many_links(self):
+        text = "正文" * 800 + "".join(f"<a href='/{i}'>{i}</a>" for i in range(30))
+        r = heuristic_score(text)
+        # 长度1600→0.5 正文充足; 链接30→链接过多(0分); 图片0
+        assert r["score"] == 0.5
+        assert "链接过多" in r["reasons"]
+
+
+class TestRetrievalMetrics:
+    def test_recall_at_k_perfect(self):
+        assert recall_at_k([0, 1, 2, 3], {0, 1}, 2) == 1.0
+
+    def test_recall_at_k_partial(self):
+        assert recall_at_k([0, 5, 1, 2], {0, 1}, 2) == 0.5  # k=2 只命中 0
+
+    def test_recall_at_k_beyond_list(self):
+        assert recall_at_k([0], {0, 1}, 5) == 0.5
+
+    def test_recall_no_relevant(self):
+        assert recall_at_k([0, 1], set(), 2) == 0.0
+
+    def test_ndcg_perfect(self):
+        # 理想位置：相关文档都排最前 → NDCG=1
+        assert ndcg_at_k([0, 1], {0, 1}, 2) == 1.0
+
+    def test_ndcg_position_penalty(self):
+        # 相关文档排在次位：DCG=1/log2(3)=0.6309, IDCG=1 → NDCG=0.6309
+        assert ndcg_at_k([5, 0], {0}, 2) == 0.6309
+
+    def test_ndcg_ideal(self):
+        import math
+        assert ndcg_at_k([0, 1, 2], {2}, 3) == round(
+            1 / math.log2(4), 4)  # 相关文档在第 3 位
 
 
 class TestPrf:

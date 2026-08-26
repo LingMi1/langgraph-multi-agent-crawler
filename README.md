@@ -5,8 +5,8 @@
 关键决策节点介入（成本分层），全程可观测、可复现。
 
 > 面试亮点叙事：Supervisor 模式 + Plan-and-Execute + 提示注入防护 + 经验记忆 +
-> 全轨迹可观测 + 轻量 RAG（语义去重 + 向量检索）+ Function Calling 闭环 +
-> LLM-as-judge 评估 + 117 项单元测试。传统爬虫确定性为主、LLM 为辅，真实业务问题驱动。
+> 全轨迹可观测 + 轻量 RAG（语义去重 + 向量检索 + Recall@k/NDCG@k 指标）+ Function Calling 闭环
+> （含质量评估核心链路）+ LLM-as-judge 评估 + 137 项单元测试。传统爬虫确定性为主、LLM 为辅，真实业务问题驱动。
 
 ---
 
@@ -48,7 +48,7 @@
 - **解析清洗**：BeautifulSoup4 · trafilatura · 自研规则引擎（4 级封顶 + 连续去重）
 - **数据模型**：Pydantic v2（严格输出 schema 校验）
 - **持久化**：SQLite（URL 去重 / HTML 缓存 / 站点学习模式）+ 本地文件 + CSV
-- **质量保障**：pytest（117 tests）+ JSONL 全轨迹 + Golden Set 离线评估 + LLM-as-judge + GitHub Actions CI
+- **质量保障**：pytest（137 tests）+ JSONL 全轨迹 + Golden Set 离线评估 + LLM-as-judge + GitHub Actions CI
 
 ## 3. 核心设计
 
@@ -116,12 +116,20 @@ tool_calls 与文本标记两种格式，轮次上限防死循环）。所有 LL
 纯 Python 零外部依赖（不依赖 numpy/sklearn/embedding），离线可跑、原理可讲：
 TF-IDF 是 BM25 前的经典基线，稀疏向量换 numpy/向量库即可上量。演示：
 `python tools/rag_demo.py hnbn666`（建索引 + 语义查询 + 注册成 Agent 可调工具）。
+检索质量可量化：**Recall@k / NDCG@k**（`agents/eval.py`，位置感知增益），
+配合 golden 相关文档集合即可评估"检索是否命中正确栏目"，而不只是"能搜到"。
 
 ### 3.11 Agent 评估体系（`agents/eval.py` + `tools/compare_runs.py`）
-离线评估"三件套"：**P/R/F1 指标**（召回型任务的量化口径）→ **LLM-as-judge**
-（规则覆盖不了的质量维度，输出强制 JSON `{score, reason}`，可插拔可审计）→
-**回归对比**（`compare_runs.py` 对比两次 golden 报告的 saved/关键词/耗时，
-REGRESSION 退出码 1 供 CI 挂钩）。让"改动是好是坏"从感觉变成数字。
+离线评估"三件套"：**P/R/F1 + Recall@k/NDCG@k 指标**（召回/检索任务的量化口径）→
+**LLM-as-judge**（规则覆盖不了的质量维度，输出强制 JSON `{score, reason}`，
+可插拔可审计）→ **回归对比**（`compare_runs.py` 对比两次 golden 报告的
+saved/关键词/耗时，REGRESSION 退出码 1 供 CI 挂钩）。让"改动是好是坏"从感觉变成数字。
+
+其中评估裁决走**核心链路 tool-calling**：`evaluate_node` 优先让 LLM 通过
+`FunctionCallingLoop` 调用 `quality_judge` 工具（确定性打分：正文长度/链接密度/图片数），
+拿到客观分后再输出评估 JSON（`eval_source=llm_fc` 可观测）；模型不支持工具标记、
+输出不可解析或 LLM 抛异常时逐级降级到纯文本 LLM → 启发式，评估链路不因模型
+不稳定而中断——把"伪多智能体"变成可实锤的 tool-calling 闭环。
 
 ## 4. 关键工程决策与踩坑
 
@@ -141,7 +149,7 @@ REGRESSION 退出码 1 供 CI 挂钩）。让"改动是好是坏"从感觉变成
 - **S**：中小型企业官网结构差异大（静态 / JS 模板 / 可视化建站），人工清洗效率低。
 - **T**：一套系统自适应任意网站并自动化全流程。
 - **A**：Supervisor 多智能体 + 计划执行审查闭环 + LLM 关键节点介入 + 规则引擎。
-- **R**：hnbn666.cn 全站冒烟 `saved=6 / failed=0`；117 项单元测试全绿；
+- **R**：hnbn666.cn 全站冒烟 `saved=6 / failed=0`；137 项单元测试全绿；
   单次运行 26 条 trace 事件完整落盘；站点学习模式二次爬取 100% 命中；
   RAG 检索 demo 对落盘页面建索引并命中正确栏目。
 
@@ -155,7 +163,7 @@ playwright install chromium          # JS 模板站渲染用
 python -c "import asyncio; from graph.workflow import run_crawler; asyncio.run(run_crawler('https://example.com', max_steps=3000))"
 
 # 单元测试
-python -m pytest tests -q            # 117 passed
+python -m pytest tests -q            # 137 passed
 
 # RAG 检索链路演示（对落盘 HTML 建索引 + 语义查询）
 python tools/rag_demo.py hnbn666
@@ -170,8 +178,8 @@ GUI 入口：`python site_crawler_gui.py`（博宇 · 网站爬取工具）。
 │                    #   + budget(成本/重试) + react(FC闭环) + semdedup(去重)
 │                    #   + vector_retriever(RAG检索) + eval(评估指标/LLM-judge)
 ├── graph/           # 编排级：workflow(Supervisor) / agents(8 Agent) / nodes(节点逻辑) / state(TypedDict)
-├── tests/           # 117 项单元测试（safety / plan / BaseAgent / 工具 / ReAct / 记账
-│                    #   / 去重 / RAG检索 / 评估 / 图装配冒烟）
+├── tests/           # 137 项单元测试（safety / plan / BaseAgent / 工具 / ReAct / 记账
+│                    #   / 去重 / RAG检索 / 评估指标 / FC评估链路 / 图装配冒烟）
 ├── tools/           # analyze_trace(轨迹分析) / golden_check(离线评估,支持--json)
 │                    #   / compare_runs(回归对比) / rag_demo(RAG检索演示)
 ├── memory.py        # SQLite 长期记忆（visited_urls / site_patterns）
@@ -194,8 +202,11 @@ strict Pydantic output schema + heuristic veto), cross-run site-pattern memory
 (cold→warm start), full JSONL trace observability, a tool layer with a
 function-calling loop (retry + exponential backoff + token budgeting), and
 lightweight RAG — n-gram Jaccard dedup plus a zero-dependency TF-IDF cosine
-retriever over harvested pages — plus a quantitative eval suite
-(P/R/F1, LLM-as-judge, run-to-run regression diff in CI). 117 unit tests.
+retriever over harvested pages (scored with Recall@k / NDCG@k) — plus a
+quantitative eval suite (P/R/F1, LLM-as-judge, run-to-run regression diff in CI),
+where the quality gate itself runs through a function-calling loop
+(LLM invokes a deterministic `quality_judge` tool before emitting its verdict).
+137 unit tests.
 
 **STAR template** (45–60s elevator pitch for English interviews):
 
@@ -205,5 +216,5 @@ retriever over harvested pages — plus a quantitative eval suite
 > A: Supervisor multi-agent graph; plan → execute → review loop; LLM reserved
 > for decisions that need judgment; a rule engine for deterministic extraction;
 > memories, observability, and an offline golden-set eval to prove it.
-> R: End-to-end run on hnbn666.cn: 6/6 sections saved, 0 failures; 117 tests
+> R: End-to-end run on hnbn666.cn: 6/6 sections saved, 0 failures; 137 tests
 > green in CI; second crawl of the same site hit 100% memory reuse.
