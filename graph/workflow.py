@@ -1,96 +1,105 @@
 """
-graph/workflow.py — LangGraph StateGraph 组装与编译。
+graph/workflow.py — LangGraph StateGraph 组装与编译（Supervisor 多智能体编排）。
+
+架构定位：
+  workflow 是监督者（Supervisor），负责把 8 个编排级 Agent 组织成图并路由：
+    ScoutAgent → NavigateAgent → FetchExtractAgent → EvaluateAgent
+      → (通过) MediaProcessorAgent → StorageAgent
+      → (不通过) ConfigAdjustAgent / CodeGenAgent → NavigateAgent 重抓
 
 图结构:
   START
     │
     ▼
-  scout_node ─── 分析站点
+  scout ─── 侦察 + 产出任务计划(plan)
     │
     ▼
-  navigate_node ─── 提取导航链接 → 填充 queue
+  navigate ─── 提取导航链接 → 填充 queue + 栏目清单并入 plan
     │
     ▼
-  fetch_extract_node ←────────────┐
-    │                              │
-    ▼                              │
-  [route_after_fetch]              │
-    │                              │
-    ├── queue 非空 ───────────────┘  (loop)
+  fetch_extract ←────────────┐
+    │                         │
+    ▼                         │
+  [route_after_fetch]         │
+    │                         │
+    ├── queue 非空 ──────────┘  (loop)
     │
     └── queue 为空
          │
          ▼
-  evaluate_node (LLM) ─── 评估爬取质量
+  evaluate ─── 审查：评估质量 + 对照 plan 检查完成度
     │
     ▼
   [route_after_evaluate]
-    │
-    ├── passed=true ──────────► storage_node → END
-    │
-    ├── passed=false + 调整<3 → config_adjust_node → navigate_node (重抓)
-    │
-    ├── passed=false + 调整≥3 + 未生成规则 → code_gen_node (LLM 最后保底)
-    │        │
-    │        └── navigate_node (用新规则重抓)
-    │
-    └── passed=false + 调整≥3 + 已生成规则 → storage_node → END
+    ├── passed=true ─────────► storage → END
+    ├── passed=false + 调整<3 → config_adjust → navigate (重抓)
+    ├── passed=false + 调整≥3 + 未生成规则 → code_gen (LLM 最后保底) → navigate
+    └── passed=false + 调整≥3 + 已生成规则 → storage → END
+
+每个节点的执行体是 Agent.run()（agents/base.py 模板方法）：
+轨迹记录（trace JSONL）+ 异常隔离（degraded 降级不打断整图）。
 """
 
 from __future__ import annotations
 
-from typing import Optional, Callable
+import os
+import time
+from typing import Any, Dict, Optional, Callable
 
 from langgraph.graph import StateGraph, END, START
 
 from .state import CrawlerState
+from .agents import build_agents
 from .nodes import (
-    scout_node,
-    navigate_node,
-    fetch_extract_node,
-    evaluate_node,
-    config_adjust_node,
-    code_gen_node,
-    media_processor_node,
-    storage_node,
     route_after_fetch,
     route_after_evaluate,
 )
-
+from agents.base import AgentContext, BaseAgent, TraceRecorder
+from config import LOCAL_BACKUP_DIR
 from schemas import agent_logger
 
+# 节点名（保持与路由字符串一致）
+_AGENT_NODE_MAP: Dict[str, str] = {
+    "scout": "scout_node",
+    "navigate": "navigate_node",
+    "fetch_extract": "fetch_extract_node",
+    "evaluate": "evaluate_node",
+    "config_adjust": "config_adjust_node",
+    "code_gen": "code_gen_node",
+    "media_processor": "media_processor_node",
+    "storage": "storage_node",
+}
+
 
 # ============================================================================
-# 图构建
+# 图构建（Supervisor 编排）
 # ============================================================================
 
-def build_crawler_graph() -> StateGraph:
+def build_crawler_graph(agents: Dict[str, BaseAgent]) -> StateGraph:
     """
-    构建多 Agent 爬虫的 LangGraph StateGraph。
+    构建多 Agent 爬虫的 LangGraph StateGraph（Supervisor 模式）。
+
+    Args:
+        agents: build_agents(ctx) 产出的编排级 Agent 实例表（按 agent.name 索引）
 
     Returns:
-        编译后的 StateGraph（可直接 invoke）
+        编译前的 StateGraph（调用方 compile）
     """
-    # 1. 创建 StateGraph
     graph = StateGraph(CrawlerState)
 
-    # 2. 添加节点
-    graph.add_node("scout_node", scout_node)
-    graph.add_node("navigate_node", navigate_node)
-    graph.add_node("fetch_extract_node", fetch_extract_node)
-    graph.add_node("evaluate_node", evaluate_node)
-    graph.add_node("config_adjust_node", config_adjust_node)
-    graph.add_node("code_gen_node", code_gen_node)
-    graph.add_node("media_processor_node", media_processor_node)
-    graph.add_node("storage_node", storage_node)
+    # ── 注册节点：每个节点 = 一个 Agent 的统一入口 run() ──
+    for agent_name, node_name in _AGENT_NODE_MAP.items():
+        agent = agents.get(agent_name)
+        if agent is None:
+            raise KeyError(f"缺少编排级 Agent: {agent_name}")
+        graph.add_node(node_name, agent.run)
 
-    # 3. 添加边
     # ── 主线：START → scout → navigate → fetch_extract ──
     graph.add_edge(START, "scout_node")
     graph.add_edge("scout_node", "navigate_node")
     graph.add_edge("navigate_node", "fetch_extract_node")
 
-    # ── 条件路由：fetch_extract 之后 ──
+    # ── 条件路由：fetch_extract 之后（BFS 循环） ──
     graph.add_conditional_edges(
         "fetch_extract_node",
         route_after_fetch,
@@ -101,7 +110,7 @@ def build_crawler_graph() -> StateGraph:
         },
     )
 
-    # ── 条件路由：评估之后 ──
+    # ── 条件路由：评估之后（审查者裁决） ──
     graph.add_conditional_edges(
         "evaluate_node",
         route_after_evaluate,
@@ -113,10 +122,8 @@ def build_crawler_graph() -> StateGraph:
         },
     )
 
-    # ── 调整后回到导航 ──
+    # ── 调整 / 规则生成后回到导航（用新配置/规则重抓） ──
     graph.add_edge("config_adjust_node", "navigate_node")
-
-    # ── LLM 规则生成后回到导航（用新规则重新抓取） ──
     graph.add_edge("code_gen_node", "navigate_node")
 
     # ── 媒体处理后落盘 ──
@@ -132,18 +139,30 @@ def build_crawler_graph() -> StateGraph:
 # 运行时入口
 # ============================================================================
 
-# 编译图（模块级单例，避免每次 invoke 重新编译）
-_crawler_app: Optional[any] = None
+def build_app(seed_url: str, concurrency: int = 3) -> "tuple[Any, AgentContext]":
+    """
+    构建一次运行所需的 (编译图, AgentContext)。
 
+    每次 run_crawler 独立构建（LangGraph 编译开销可忽略）：
+      - TraceRecorder 落盘到 output/<netloc>/traces/trace_<ts>.jsonl
+      - 8 个编排级 Agent 共享同一 AgentContext（trace / llm / memory）
+    """
+    from urllib.parse import urlparse
 
-def get_crawler_app():
-    """获取编译后的 LangGraph 应用（懒加载单例）"""
-    global _crawler_app
-    if _crawler_app is None:
-        graph = build_crawler_graph()
-        _crawler_app = graph.compile()
-        agent_logger.info("[Graph::workflow] LangGraph 爬虫工作流已编译")
-    return _crawler_app
+    netloc = urlparse(seed_url).netloc.replace(":", "_")
+    output_dir = str(LOCAL_BACKUP_DIR)
+    trace = TraceRecorder(
+        output_dir=os.path.join(output_dir, netloc),
+        run_id=time.strftime("%Y%m%d_%H%M%S"),
+    )
+    ctx = AgentContext(trace=trace)
+    agents = build_agents(ctx)
+    graph = build_crawler_graph(agents)
+    app = graph.compile()
+    agent_logger.info(
+        f"[Graph::workflow] Supervisor 图已编译 | 8 Agents | trace={trace.path or '(无落盘)'}"
+    )
+    return app, ctx
 
 
 async def run_crawler(
@@ -154,7 +173,7 @@ async def run_crawler(
     concurrency: int = 3,
 ) -> dict:
     """
-    运行 LangGraph 爬虫工作流。
+    运行 LangGraph 多 Agent 爬虫工作流（Supervisor 编排）。
 
     Args:
         seed_url:     种子 URL（站点首页）
@@ -177,7 +196,7 @@ async def run_crawler(
 
     log(f"启动 LangGraph 多 Agent 爬虫 | 目标: {seed_url} | max_steps={max_steps} | concurrency={concurrency}")
 
-    app = get_crawler_app()
+    app, ctx = build_app(seed_url, concurrency)
     initial_state: CrawlerState = {
         "seed_url": seed_url,
         "progress_callback": progress_callback,
@@ -216,6 +235,7 @@ async def run_crawler(
     adjustment_count = final_state.get("adjustment_count", 0)
     error = final_state.get("error", "")
     blocked_urls = final_state.get("anti_crawl_blocked_urls", {})
+    plan = final_state.get("plan", {}) or {}
 
     log(f"\n{'='*50}")
     log(f"📊 LangGraph 爬虫完成")
@@ -233,8 +253,13 @@ async def run_crawler(
     log(f"  LLM评估:    {'通过' if evaluation.get('passed', True) else '未通过'} "
         f"(score={evaluation.get('score', 0):.2f})")
     log(f"  调整次数:   {adjustment_count}")
+    if plan:
+        log(f"  任务计划:   type={plan.get('site_type')} | "
+            f"栏目={len(plan.get('expected_sections') or [])} | 状态={plan.get('status')}")
     if error:
         log(f"  ⚠️ 错误:    {error}")
+    if ctx.trace.path:
+        log(f"  🧭 多Agent轨迹: {ctx.trace.path}")
     log(f"{'='*50}")
 
     result = dict(stats)

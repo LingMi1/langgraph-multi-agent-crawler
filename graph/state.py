@@ -151,6 +151,9 @@ class CrawlerState(TypedDict, total=False):
     evaluation: Dict[str, Any]         # EvaluationResult 序列化
     adjustment_count: int              # 已调整次数（上限 3）
 
+    # ── 多智能体任务计划（Plan-and-Execute：ScoutAgent 产出，EvaluateAgent 对照检查） ──
+    plan: Dict[str, Any]               # {"status","steps","site_type","needs_js_render","template_hints","expected_sections"}
+
     # ── LLM 生成提取规则（最后保底） ──
     extraction_rules: Dict[str, Any]   # ExtractionRules 序列化（None=未生成）
     generation_attempted: bool         # 是否已尝试过 LLM 生成规则（防止死循环）
