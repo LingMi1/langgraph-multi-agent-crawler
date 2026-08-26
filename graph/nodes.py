@@ -1255,10 +1255,16 @@ async def _process_one_url(
         _bc_nav = _extract_breadcrumb_nav(rescued_html)
         if _bc_nav and len(_bc_nav) >= 2:
             # ① 面包屑 ≥2 级：页面自带真实层级，最高优先
+            #   ★ 合法性校验（借鉴博宇 _classify_page）：仅当 BFS nav_path 是面包屑
+            #     链的合法扩展（顶层一致）才追加更深段，否则丢弃 BFS 链直接采用面包屑。
+            #     背景：zztzmjg 交叉导航站，/nengli/ 从产品中心页侧栏继承假父链
+            #     ['产品中心']，与面包屑真值 ['服务能力','工程设计'] 顶级冲突，
+            #     无条件追加会拼出幽灵段 ['服务能力','工程设计','产品中心']。
             _merged = list(_bc_nav)
-            for _p in nav_path:
-                if _p and _p != "网站地图" and _p not in _merged:
-                    _merged.append(_p)
+            if nav_path[:len(_bc_nav)] == _bc_nav:
+                for _p in nav_path[len(_bc_nav):]:
+                    if _p and _p != "网站地图" and _p not in _merged:
+                        _merged.append(_p)
             if _merged != nav_path:
                 _resolved_nav, _resolve_reason = _merged, "breadcrumb>=2"
         else:
@@ -1280,10 +1286,12 @@ async def _process_one_url(
                     _resolved_nav, _resolve_reason = _merged, "registry"
             elif _bc_nav and not _is_likely_page_title(_bc_nav[0]):
                 # ④ 单级面包屑兜底（非页面标题）
+                #   同样加合法性校验：BFS 链顶层与面包屑一致才追加更深段
                 _merged = list(_bc_nav)
-                for _p in nav_path:
-                    if _p and _p != "网站地图" and _p not in _merged:
-                        _merged.append(_p)
+                if nav_path[:len(_bc_nav)] == _bc_nav:
+                    for _p in nav_path[len(_bc_nav):]:
+                        if _p and _p != "网站地图" and _p not in _merged:
+                            _merged.append(_p)
                 if _merged != nav_path:
                     _resolved_nav, _resolve_reason = _merged, "breadcrumb-single"
     if _resolved_nav:
@@ -1310,6 +1318,12 @@ async def _process_one_url(
         if _title_nav and (list(_title_nav) != nav_path or len(nav_path) > 1):
             nav_path = _title_nav
             page.nav_path = list(_title_nav)
+
+    # ★ 幽灵段清理：停止标签 + 中间段一级栏目名截断（见 _trim_phantom_sections），
+    #   在列表页/详情页分支前统一净化一次
+    if nav_names:
+        nav_path = _trim_phantom_sections(nav_path, set(nav_names))
+        page.nav_path = list(nav_path)
 
     # ── 列表页判断 ──
     base_host = urlparse(seed_url).netloc.lower()
@@ -1362,6 +1376,9 @@ async def _process_one_url(
             nav_path = list(_base_nav)
         # ★ 追加后归一化：4 级封顶 + 连续重复去重，防链式塌缩污染注册表
         nav_path = _snap_nav_to_registry(url, nav_path)
+        # ★ 幽灵段清理：注册表登记前净化，防污染兄弟页的父级锚定
+        if nav_names:
+            nav_path = _trim_phantom_sections(nav_path, set(nav_names))
         _register_url_nav(url, nav_path)
         # ★ 正文页误判保护：如果页面有大量正文内容（>5000字），说明是详情页（非真列表页），不提取子链接
         #    避免侧边栏推荐/相关链接等高密度区导致 nav_path 传播污染
@@ -1454,6 +1471,9 @@ async def _process_one_url(
             if _llm_nav:
                 nav_path = _llm_nav
                 page.nav_path = list(_llm_nav)
+        # ★ 幽灵段清理：LLM 输出也可能拼进幽灵段，定稿前统一截断
+        nav_path = _trim_phantom_sections(nav_path, set(nav_names))
+        page.nav_path = list(nav_path)
 
     # ── 详情页: 清洗 ──
     # 优先使用 LLM 生成的规则（如果存在），否则使用默认 trafilatura/BS4 管道
@@ -3229,6 +3249,38 @@ def _lookup_url_nav(url: str) -> list:
         if not cur:
             cur = "/"
     return best
+
+
+# ★ 停止标签（借鉴博宇 _LEVEL_STOP_LABELS）：这些标签不属于内容栏目层级，
+#   出现在导航锚文本/面包屑时直接跳过，不进 nav_path。
+_NAV_STOP_LABELS = {
+    "首页", "网站首页", "返回首页", "设为首页", "收藏本站", "登录", "注册",
+    "在线留言", "在线咨询", "留言板", "企业邮局", "邮箱登录", "English", "中文版",
+    "返回顶部", "网站地图", "版权声明", "法律声明",
+}
+
+
+def _trim_phantom_sections(nav_path: List[str], nav_names: Set[str]) -> List[str]:
+    """幽灵段清理（博宇"先建导航树 + 页面归入树"思路的确定性护栏）：
+    ① 停止标签（首页/登录/注册等）不进层级；
+    ② 已知一级栏目名（首页导航锚文本）出现在非首位 → 该段是交叉导航拼入的
+       幽灵段，截断到此（保留其前的真实父链）。
+    背景：zztzmjg 交叉导航站，/nengli/gongchengsheji/ 从产品中心页侧栏继承
+    假父链 ['产品中心']，与面包屑真值 ['服务能力','工程设计'] 合并后拼出
+    ['服务能力','工程设计','产品中心']，"产品中心" 出现在中间即幽灵段。
+    """
+    if not nav_path:
+        return nav_path
+    # 先过滤停止标签，再按"过滤后的位置"判幽灵段：
+    # 若按原始下标判，['首页','产品中心'] 过滤掉首页后产品中心落位 index 1，
+    # 会被误判为中间段幽灵段而截断成空。
+    cleaned = [p for p in nav_path if p and p not in _NAV_STOP_LABELS]
+    out: List[str] = []
+    for i, p in enumerate(cleaned):
+        if i > 0 and nav_names and p in nav_names:
+            break
+        out.append(p)
+    return out
 
 
 def _snap_nav_to_registry(url: str, nav_path: List[str]) -> List[str]:
