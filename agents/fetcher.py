@@ -604,6 +604,25 @@ class HttpxPlaywrightFetcher(FetcherRouterInterface):
 # 辅助函数
 # ============================================================================
 
+# ★ <title> 站点名后缀清理（对齐清洗提示词：title 不是网站名/栏目名）
+#   企业站 <title> 常见格式「文章标题 - 公司名」（hnbn666: "关于我们 - 河南邦农种业有限公司"），
+#   正文无 h 标签时 _extract_title 会回退到 <title>，导致标题带站点名。
+#   仅当分隔符后最后一段匹配站点名特征时才剥离，避免误伤正文标题。
+_SITE_NAME_SUFFIX_RE = re.compile(
+    r"(有限责任公司|股份有限公司|有限公司|集团|股份公司|公司|官网|官方网站|官网首页|首页)$"
+)
+_TITLE_SEPS = (" - ", " -", "|", "—", "–", "｜")
+
+
+def _clean_detail_title(title: str) -> str:
+    for sep in _TITLE_SEPS:
+        if sep in title:
+            parts = [p.strip() for p in title.split(sep)]
+            if len(parts) >= 2 and _SITE_NAME_SUFFIX_RE.search(parts[-1]):
+                return sep.join(parts[:-1]).strip()
+    return title
+
+
 def _extract_title(html: str) -> str:
     """从 HTML 中提取标题（同步，供 executor 调用）
 
@@ -628,7 +647,7 @@ def _extract_title(html: str) -> str:
         # 2. title 标签
         title_tag = soup.find("title")
         if title_tag and title_tag.get_text(strip=True):
-            return title_tag.get_text(strip=True)[:300]
+            return _clean_detail_title(title_tag.get_text(strip=True))[:300]
 
         # 3. 兜底：header 中的 h1
         h1 = soup.find("h1")
