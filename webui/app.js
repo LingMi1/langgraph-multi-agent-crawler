@@ -227,6 +227,7 @@ $('runner_sel').onchange = async function () {
 function toggleReady() {
   if (window.pywebview && window.pywebview.api) {
     state.bridgeReady = true;
+    $('btn_start').disabled = false; // ★ 桥接就绪才可开始（初始 HTML 为 disabled）
     loadInitial();
     appendLog('pywebview 桥接就绪', 'pass');
     toast('桥接就绪，可以开始');
@@ -341,6 +342,102 @@ document.addEventListener('keydown', function (e) {
   if (e.key === 'Escape') $('btn_stop').click();
 });
 
+/* ============ 结果可视化：页签 / 页面列表 / iframe 预览 / 打包导出 ============ */
+
+// 预览内容排版样式（浅色文章页，借鉴博宇 renderHtmlPreview 思路）
+var PREVIEW_STYLE = [
+  "body{font-family:system-ui,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;line-height:1.75;color:#1e293b;max-width:920px;margin:0 auto;padding:28px;}",
+  "h1,h2,h3,h4{color:#1e293b;margin:1.2em 0 .5em;}p{margin:.6em 0;}",
+  "img{max-width:100%;height:auto;border-radius:6px;}",
+  "table{border-collapse:collapse;width:100%;}th,td{border:1px solid #e2e8f0;padding:8px 12px;text-align:left;}",
+  "a{color:#2563eb;text-decoration:none;}",
+  "pre,code{background:#f1f5f9;border-radius:4px;}pre{padding:14px;overflow-x:auto;}code{padding:2px 6px;}",
+  "ul,ol{padding-left:1.4em;}blockquote{border-left:3px solid #e2e8f0;margin:0;padding-left:14px;color:#64748b;}"
+].join('');
+
+var state = Object.assign(state, { currentRel: '', results: [] });
+
+// ---- 页签切换 ----
+document.querySelectorAll('.tab').forEach(function (tab) {
+  tab.onclick = function () {
+    document.querySelectorAll('.tab').forEach(function (t) { t.classList.toggle('active', t === tab); });
+    document.querySelectorAll('.pane').forEach(function (p) { p.classList.toggle('active', p.id === 'pane_' + tab.dataset.pane); });
+    if (tab.dataset.pane === 'results') loadResults();
+  };
+});
+
+// ---- 加载结果列表（最新输出目录） ----
+var resultsLoading = false;
+async function loadResults() {
+  if (resultsLoading) return;
+  resultsLoading = true;
+  try {
+    var d = await window.pywebview.api.list_results();
+    state.results = d.pages || [];
+    $('res_site').textContent = d.site || '—';
+    $('res_count').textContent = state.results.length ? (state.results.length + ' 页') : '';
+    $('btn_export').disabled = !state.results.length;
+    var box = $('res_list');
+    if (!state.results.length) {
+      box.innerHTML = '<div class="res-empty">暂无结果 —— 完成一次真实爬取后在此查看页面</div>';
+      $('res_url').textContent = '未选择页面';
+      $('res_dot').classList.remove('ok');
+      $('btn_open_ext').disabled = true;
+      $('res_frame').srcdoc = '';
+      return;
+    }
+    box.innerHTML = '';
+    state.results.forEach(function (p) {
+      var el = document.createElement('div');
+      el.className = 'res-item';
+      el.innerHTML = '<div class="res-title"></div><div class="res-sub"></div>';
+      el.querySelector('.res-title').textContent = p.title || p.rel;
+      el.querySelector('.res-sub').textContent = (p.size / 1024).toFixed(1) + ' KB';
+      el.onclick = function () { selectResult(p, el); };
+      box.appendChild(el);
+    });
+    selectResult(state.results[0], box.firstChild);
+  } catch (e) {
+    /* 桥接未就绪 */
+  } finally {
+    resultsLoading = false;
+  }
+}
+
+function selectResult(p, el) {
+  document.querySelectorAll('.res-item').forEach(function (x) { x.classList.remove('sel'); });
+  if (el) el.classList.add('sel');
+  state.currentRel = p.rel;
+  $('res_url').textContent = p.rel;
+  $('res_dot').classList.add('ok');
+  $('btn_open_ext').disabled = false;
+  window.pywebview.api.read_page(p.rel).then(function (html) {
+    // 剥离 <html>/<head>/<body> 包装，只取 body 内容，避免 iframe 双重包裹
+    var body = html || '';
+    var m = body.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+    if (m) body = m[1];
+    $('res_frame').srcdoc = '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+      + '<style>' + PREVIEW_STYLE + '</style></head><body>' + body + '</body></html>';
+  });
+}
+
+// ---- 打包导出 / 系统浏览器打开 ----
+$('btn_export').onclick = async function () {
+  if (!state.results.length) return;
+  var p = await window.pywebview.api.export_zip();
+  toast(p ? '已打包：' + p.split(/[\\/]/).pop() + '（输出目录已打开）' : '打包失败', p ? 'pass' : 'fail');
+};
+$('btn_open_ext').onclick = async function () {
+  if (state.currentRel) await window.pywebview.api.open_external(state.currentRel);
+};
+
+// ---- 任务完成时自动刷新结果 ----
+var _origSetRunningUI = setRunningUI;
+window.setRunningUI = function (on) {
+  _origSetRunningUI(on);
+  if (!on && state.bridgeReady) loadResults(); // 完成后拉取最新结果
+};
+
 /* ============ 桥接推入（Python → JS）全局钩子 ============ */
 window.appendLog = appendLog;
 window.appendSummary = appendSummary;
@@ -348,5 +445,5 @@ window.setStats = setStats;
 window.setStatus = setStatus;
 window.setBar = setBar;
 window.setBusy = setBusy;
-window.setRunningUI = setRunningUI;
 window.resetOutput = resetOutput;
+// 注意：window.setRunningUI 已在结果区包装为「完成后自动刷新结果」版本，不再重复赋值

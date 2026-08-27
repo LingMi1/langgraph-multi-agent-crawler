@@ -175,6 +175,93 @@ class Api:
     def ping(self):
         return "pong"
 
+    # ---- 结果可视化：页面列表 / HTML 预览 / 打包导出 ----
+    # 输出目录结构: output/<netloc>/<栏目>/<标题>.html (+ crawl_results.csv)
+    OUTPUT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+
+    def _latest_result_dir(self):
+        """output/ 下最新被写入的站点目录（含 html 文件），没有则返回 None。"""
+        try:
+            if not os.path.isdir(self.OUTPUT_ROOT):
+                return None
+            cands = []
+            for name in os.listdir(self.OUTPUT_ROOT):
+                p = os.path.join(self.OUTPUT_ROOT, name)
+                if os.path.isdir(p):
+                    html_cnt = sum(1 for _, _, fs in os.walk(p) for f in fs if f.lower().endswith(".html"))
+                    if html_cnt:
+                        cands.append((p, os.path.getmtime(p), html_cnt))
+            if not cands:
+                return None
+            cands.sort(key=lambda t: t[1], reverse=True)
+            return {"path": cands[0][0], "site": os.path.basename(cands[0][0]), "html_cnt": cands[0][2]}
+        except Exception:
+            return None
+
+    def list_results(self):
+        """扫描最新输出目录，返回页面列表。"""
+        d = self._latest_result_dir()
+        if not d:
+            return {"site": "", "pages": []}
+        pages = []
+        for root, _, files in os.walk(d["path"]):
+            for f in sorted(files):
+                if not f.lower().endswith(".html"):
+                    continue
+                full = os.path.join(root, f)
+                rel = os.path.relpath(full, d["path"]).replace("\\", "/")
+                pages.append({
+                    "rel": rel,
+                    "title": os.path.splitext(f)[0],
+                    "size": os.path.getsize(full),
+                })
+        return {"site": d["site"], "pages": pages}
+
+    def read_page(self, rel: str):
+        """读取某页 HTML 原文（供前端 iframe srcdoc 预览）。"""
+        d = self._latest_result_dir()
+        if not d:
+            return ""
+        full = os.path.join(d["path"], rel.replace("/", os.sep))
+        try:
+            with open(full, "r", encoding="utf-8", errors="replace") as fh:
+                return fh.read()
+        except Exception:
+            return ""
+
+    def open_external(self, rel: str = ""):
+        """用系统默认浏览器打开预览页对应的本地 HTML 文件（file://）。"""
+        import webbrowser
+        d = self._latest_result_dir()
+        if not d or not rel:
+            return False
+        full = os.path.join(d["path"], rel.replace("/", os.sep))
+        url = "file:///" + os.path.abspath(full).replace("\\", "/")
+        webbrowser.open(url)
+        return True
+
+    def export_zip(self):
+        """打包最新输出目录为 zip，返回 zip 绝对路径（前端 toast 提示并打开所在目录）。"""
+        import zipfile
+        d = self._latest_result_dir()
+        if not d:
+            return ""
+        zip_path = d["path"] + "_result.zip"
+        try:
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for root, _, files in os.walk(d["path"]):
+                    for f in files:
+                        full = os.path.join(root, f)
+                        arc = os.path.relpath(full, os.path.dirname(d["path"])).replace("\\", "/")
+                        zf.write(full, arc)
+            try:
+                os.startfile(os.path.dirname(zip_path))  # 打开输出目录（含 zip）
+            except Exception:
+                pass
+            return zip_path
+        except Exception:
+            return ""
+
 
 def main():
     api = Api(None)

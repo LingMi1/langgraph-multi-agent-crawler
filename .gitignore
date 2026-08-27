@@ -40,6 +40,9 @@ __pycache__/
 .venv/
 venv/
 
+# ── 本地 GUI 运行时（pywebview --target 安装目录，不入库） ──
+_pwv_lib/
+
 # ── 数据库 ──
 *.db
 *.sqlite3

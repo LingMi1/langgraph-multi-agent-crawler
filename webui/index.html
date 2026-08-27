@@ -60,7 +60,7 @@
         </section>
       </aside>
 
-      <!-- 右栏：统计 + 日志 + 汇总 -->
+      <!-- 右栏：统计 + 页签（日志 / 汇总 / 结果） -->
       <section class="col-run">
         <div class="panel stats-panel">
           <span class="eyebrow">Live Stats</span>
@@ -73,17 +73,46 @@
           </div>
         </div>
 
-        <div class="panel log-panel">
+        <div class="tabs">
+          <button class="tab active" data-pane="log">日志</button>
+          <button class="tab" data-pane="summary">汇总</button>
+          <button class="tab" data-pane="results">结果</button>
+        </div>
+
+        <div class="panel log-panel pane active" id="pane_log">
           <span class="eyebrow">Run Log <span class="log-count" id="log_count"></span></span>
           <div class="log-box" id="log">
             <div class="empty" id="log_empty">暂无日志 —— 点击「开始任务」运行</div>
           </div>
         </div>
 
-        <div class="panel skip-panel">
+        <div class="panel skip-panel pane" id="pane_summary">
           <span class="eyebrow">Summary / Output</span>
           <div class="skip-box" id="summary">
             <div class="empty" id="summary_empty">运行后显示汇总 / 输出</div>
+          </div>
+        </div>
+
+        <div class="panel results-panel pane" id="pane_results">
+          <span class="eyebrow">Crawl Results
+            <button class="btn-ghost res-export" id="btn_export" disabled>打包 ZIP</button>
+          </span>
+          <div class="res-toolbar">
+            <span class="res-site" id="res_site">—</span>
+            <span class="res-count" id="res_count"></span>
+          </div>
+          <div class="res-body">
+            <div class="res-list" id="res_list">
+              <div class="res-empty">暂无结果 —— 完成一次真实爬取后在此查看页面</div>
+            </div>
+            <div class="res-preview">
+              <div class="res-addr">
+                <span class="addr-dot" id="res_dot"></span>
+                <span class="addr-url" id="res_url">未选择页面</span>
+                <button class="btn-ghost res-open" id="btn_open_ext" disabled title="用系统浏览器打开">↗</button>
+              </div>
+              <iframe id="res_frame" sandbox="" title="页面预览"></iframe>
+            </div>
           </div>
         </div>
       </section>

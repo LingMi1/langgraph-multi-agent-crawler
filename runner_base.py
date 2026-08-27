@@ -239,9 +239,14 @@ class SampleRunner(TaskRunner):
 # ============================================================================
 # 业务注册表
 # ============================================================================
+# dry_run 开关：False=真爬（调 main.run_langgraph_crawler 并落盘页面）。
+# 可用环境变量 CRAWLER_DRY_RUN=true 临时切回演示模式（如现场演示不想真爬）。
+import os as _os
+
+DRY_RUN = _os.environ.get("CRAWLER_DRY_RUN", "false").lower() in ("1", "true", "yes")
 
 RUNNERS = {
-    CrawlerRunner.name: CrawlerRunner(dry_run=True),
+    CrawlerRunner.name: CrawlerRunner(dry_run=DRY_RUN),
     SampleRunner.name: SampleRunner(),
 }
 
