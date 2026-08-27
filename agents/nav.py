@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 import asyncio
-from typing import List, Set, Dict
+from typing import List, Set
 from urllib.parse import urljoin, urlparse, urlunparse
 
 from bs4 import BeautifulSoup, Tag

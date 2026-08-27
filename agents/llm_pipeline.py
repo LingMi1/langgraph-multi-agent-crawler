@@ -21,13 +21,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
-import csv
-import html as html_lib
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urljoin, urlparse
+from typing import Dict, List, Optional
+from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 

@@ -9,8 +9,7 @@
 
 from __future__ import annotations
 import uuid
-from typing import List, Optional, Dict, Any
-from dataclasses import dataclass, field
+from typing import List, Dict, Any
 from datetime import datetime
 
 from pydantic import BaseModel, Field

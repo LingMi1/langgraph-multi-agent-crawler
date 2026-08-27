@@ -7,8 +7,6 @@
 import asyncio
 import json
 
-import pytest
-
 from agents.react import (
     FunctionCallingLoop,
     ToolCall,

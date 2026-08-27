@@ -1,7 +1,15 @@
 """tools/golden_check.py — 离线评估集（Golden Set）回归检查
 
-对一组"已知答案"的站点跑完整爬取，断言关键指标（保存量 / 落盘关键词），
-用于验证清洗链路与规则改动没有引入回归。
+对一组"已知答案"的站点跑完整爬取，断言关键指标（保存量 / 落盘关键词 /
+P/R/F1 覆盖率 / 栏目发现率），用于验证清洗链路与规则改动没有引入回归，
+并给每次改动产出可对比的量化指标（与 tools/compare_runs.py 联动）。
+
+指标层（召回型任务：爬虫要"尽量全、尽量准"）：
+  - precision / recall / f1：保存覆盖率口径（agents/eval.compute_prf）
+  - section_recall：期望栏目在落盘目录中的发现率（recall@k 思想的栏目版）
+  - keyword_hit：落盘内容关键词断言
+排序类检索指标（recall@k / ndcg@k）属于 RAG 链路（tools/rag_demo.py），
+两套指标各司其职，README 有定位说明。
 
 用法:
   python tools/golden_check.py            # 跑全部 golden 站点
@@ -20,6 +28,7 @@ from urllib.parse import urlparse
 # 保证从项目根目录可导入（config / graph / agents）
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from agents.eval import compute_prf
 from config import LOCAL_BACKUP_DIR
 from graph.workflow import run_crawler
 
@@ -35,28 +44,57 @@ GOLDEN_SITES = [
         "keyword": "豫花",          # 规则13 纯图产品页应保存（标题含产品名）
         "desc": "RuiQiCMS 可视化建站 / 纯图产品详情页（规则13）",
     },
+    {
+        "name": "books",
+        "url": "http://books.toscrape.com/",
+        "site_type": "ecommerce",
+        "min_saved": 20,            # 首页即列出 20 本书，全站导航只会更多（硬断言）
+        "expected_saved": 20,       # P/R/F1 分母：达到首页量即视为召回达标
+        "keyword": "Books to Scrape",
+        "desc": "Scrapy 教程标配公开演示站 / 电商书架模板（模板多样性回归）",
+    },
+    {
+        "name": "quotes",
+        "url": "http://quotes.toscrape.com/",
+        "site_type": "paged_list",
+        "min_saved": 1,             # 硬断言只要求首页可达
+        "expected_saved": 10,       # 分页列表应有 10 页 → 分页发现能力以 recall 度量
+        "keyword": "Quotes to Scrape",
+        "desc": "Scrapy 教程标配公开演示站 / 多页分页列表模板（分页发现回归）",
+    },
     # 新增站点时按此模板扩展：
     # {
     #     "name": "example",
     #     "url": "https://example.com/",
     #     "site_type": "cms",
-    #     "min_saved": 3,
-    #     "keyword": "公司",
+    #     "min_saved": 3,          # 最低保存量（硬断言）
+    #     "expected_saved": 5,     # 期望保存量（P/R/F1 分母，缺省取 min_saved）
+    #     "keyword": "公司",        # 落盘内容关键词（可选）
+    #     "expected_sections": ["关于", "产品"],  # 期望栏目（section_recall，可选）
     #     "desc": "示例站点描述",
     # },
 ]
 
 
 def _scan_backup(site: dict):
-    """扫描该站点已落盘的 HTML：返回 (saved 数量, 关键词是否命中)。
+    """扫描该站点已落盘的 HTML：返回 (saved, keyword_hit, discovered_sections)。
 
     在线 / 离线两条路径共用同一份"落盘断言"，保证判定口径一致。
+    discovered_sections = 落盘目录下的顶层子目录名集合（栏目子目录）。
     """
     netloc = urlparse(site["url"]).netloc.replace(":", "_")
     out_dir = os.path.join(LOCAL_BACKUP_DIR, netloc)
     saved = 0
     keyword_hit = not site.get("keyword")
+    sections = set()
     if os.path.isdir(out_dir):
+        try:
+            sections = {
+                d for d in os.listdir(out_dir)
+                if os.path.isdir(os.path.join(out_dir, d))
+            }
+        except OSError:
+            sections = set()
         for root, _, fs in os.walk(out_dir):
             for name in fs:
                 if not name.endswith(".html"):
@@ -70,7 +108,31 @@ def _scan_backup(site: dict):
                             keyword_hit = True
                 except OSError:
                     continue
-    return saved, keyword_hit
+    return saved, keyword_hit, sections
+
+
+def _metrics(site: dict, saved: int, sections: set) -> dict:
+    """golden 指标层：P/R/F1（保存覆盖率）+ 栏目发现率（recall@k 思想的栏目版）。
+
+    overlap 采用保守口径 min(saved, expected)：只把"已保存"计入正确命中，
+    不臆测未落盘的页面是否正确。
+    """
+    expected = int(site.get("expected_saved") or site.get("min_saved") or 1)
+    overlap = min(saved, expected)
+    prf = compute_prf(expected, saved, overlap)
+    metrics = {
+        "precision": prf["precision"],
+        "recall": prf["recall"],
+        "f1": prf["f1"],
+        "coverage": round(overlap / expected, 4),
+    }
+    exp_sections = site.get("expected_sections") or []
+    if exp_sections:
+        hit = len(set(exp_sections) & sections)
+        metrics["section_recall"] = round(hit / len(exp_sections), 4)
+    else:
+        metrics["section_recall"] = None
+    return metrics
 
 
 def _run_one(site: dict, max_steps: int = 3000) -> dict:
@@ -88,7 +150,8 @@ def _run_one(site: dict, max_steps: int = 3000) -> dict:
             "elapsed_s": round(time.time() - t0, 1),
         }
 
-    saved, keyword_hit = _scan_backup(site)
+    saved, keyword_hit, sections = _scan_backup(site)
+    metrics = _metrics(site, saved, sections)
     ok = True
     reasons = []
 
@@ -102,7 +165,7 @@ def _run_one(site: dict, max_steps: int = 3000) -> dict:
 
     return {
         "name": site["name"], "ok": ok, "saved": saved, "min_saved": site["min_saved"],
-        "keyword_hit": keyword_hit, "reasons": reasons,
+        "keyword_hit": keyword_hit, "metrics": metrics, "reasons": reasons,
         "elapsed_s": round(time.time() - t0, 1),
     }
 
@@ -116,7 +179,8 @@ def _offline_one(site: dict) -> dict:
     import time
 
     t0 = time.time()
-    saved, keyword_hit = _scan_backup(site)
+    saved, keyword_hit, sections = _scan_backup(site)
+    metrics = _metrics(site, saved, sections)
     ok = True
     reasons = []
     if saved < site["min_saved"]:
@@ -128,17 +192,20 @@ def _offline_one(site: dict) -> dict:
 
     return {
         "name": site["name"], "ok": ok, "saved": saved, "min_saved": site["min_saved"],
-        "keyword_hit": keyword_hit, "reasons": reasons,
+        "keyword_hit": keyword_hit, "metrics": metrics, "reasons": reasons,
         "elapsed_s": round(time.time() - t0, 1), "offline": True,
     }
 
 
 def _format_result(r: dict) -> str:
     status = "PASS" if r["ok"] else "FAIL"
-    detail = f"saved={r['saved']}"
+    m = r.get("metrics") or {}
+    detail = f"saved={r['saved']} recall={m.get('recall', '-')} f1={m.get('f1', '-')}"
+    if m.get("section_recall") is not None:
+        detail += f" section={m['section_recall']}"
     if r.get("reasons"):
         detail += " | " + "; ".join(r["reasons"])
-    return f"[{status}] {r['name']:<10} {detail} ({r['elapsed_s']}s)"
+    return f"[{status}] {r['name']:<12} {detail} ({r['elapsed_s']}s)"
 
 
 def main() -> int:

@@ -9,7 +9,6 @@ graph/state.py — LangGraph 多 Agent 爬虫全局状态定义
 
 from typing import TypedDict, List, Dict, Any, Optional, Annotated, Callable
 from pydantic import BaseModel, Field
-import operator
 
 
 # ============================================================================

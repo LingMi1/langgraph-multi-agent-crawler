@@ -6,7 +6,8 @@
 
 > 面试亮点叙事：Supervisor 模式 + Plan-and-Execute + 提示注入防护 + 经验记忆 +
 > 全轨迹可观测 + 轻量 RAG（语义去重 + 向量检索 + Recall@k/NDCG@k 指标）+ Function Calling 闭环
-> （含质量评估核心链路）+ LLM-as-judge 评估 + 152 项单元测试。传统爬虫确定性为主、LLM 为辅，真实业务问题驱动。
+> （含质量评估核心链路）+ LLM-as-judge 评估 + **离线 Golden 指标闭环（P/R/F1 + 栏目发现率 +
+> 全指标回归对比）+ 双层静态检查（自研 stdlib 版 + ruff 交叉验证）** + 161 项单元测试。传统爬虫确定性为主、LLM 为辅，真实业务问题驱动。
 
 ---
 
@@ -48,7 +49,7 @@
 - **解析清洗**：BeautifulSoup4 · trafilatura · 自研规则引擎（4 级封顶 + 连续去重）
 - **数据模型**：Pydantic v2（严格输出 schema 校验）
 - **持久化**：SQLite（URL 去重 / HTML 缓存 / 站点学习模式）+ 本地文件 + CSV
-- **质量保障**：pytest（152 tests）+ JSONL 全轨迹 + Golden Set 离线评估 + LLM-as-judge + GitHub Actions CI
+- **质量保障**：pytest（161 tests）+ JSONL 全轨迹 + Golden Set 离线评估（P/R/F1 + 栏目发现率）+ LLM-as-judge + GitHub Actions CI（pytest + 双层静态检查）
 
 ## 3. 核心设计
 
@@ -127,11 +128,22 @@ TF-IDF 是 BM25 前的经典基线，稀疏向量换 numpy/向量库即可上量
 检索质量可量化：**Recall@k / NDCG@k**（`agents/eval.py`，位置感知增益），
 配合 golden 相关文档集合即可评估"检索是否命中正确栏目"，而不只是"能搜到"。
 
-### 3.11 Agent 评估体系（`agents/eval.py` + `tools/compare_runs.py`）
+### 3.11 Agent 评估体系（`agents/eval.py` + `tools/golden_check.py` + `tools/compare_runs.py`）
 离线评估"三件套"：**P/R/F1 + Recall@k/NDCG@k 指标**（召回/检索任务的量化口径）→
 **LLM-as-judge**（规则覆盖不了的质量维度，输出强制 JSON `{score, reason}`，
-可插拔可审计）→ **回归对比**（`compare_runs.py` 对比两次 golden 报告的
-saved/关键词/耗时，REGRESSION 退出码 1 供 CI 挂钩）。让"改动是好是坏"从感觉变成数字。
+可插拔可审计）→ **回归对比**。让"改动是好是坏"从感觉变成数字。
+
+**Golden 指标闭环**（`tools/golden_check.py`）：对 3 个不同模板的公开演示站
+（门户 / 电商 books.toscrape / 分页列表 quotes.toscrape）做离线评估，报告直接输出
+**P/R/F1**（落盘覆盖率：`overlap = min(saved, expected)` 保守口径，不臆测未落盘页面的正确性）
+与**栏目发现率**（`section_recall`：落盘目录顶层栏目名 与 expected_sections 的召回）——
+验证"这次改动让 recall +0.2"，而不是只报"保存了 N 页"。支持 `--offline --json`
+输出机器可读指标，供脚本消费。
+
+**回归对比**（`tools/compare_runs.py`）：对比两次 golden 报告的**全指标 diff**
+（saved / recall / f1 / section_recall / keyword_hit），任一主指标变差即判定
+**REGRESSION**（退出码 1 供 CI 挂钩），任一变好且无变差判定 IMPROVED，全同判定
+SAME——量化回归，不靠肉眼。
 
 其中评估裁决走**核心链路 tool-calling**：`evaluate_node` 优先让 LLM 通过
 `FunctionCallingLoop` 调用 `quality_judge` 工具（确定性打分：正文长度/链接密度/图片数），
@@ -157,9 +169,10 @@ saved/关键词/耗时，REGRESSION 退出码 1 供 CI 挂钩）。让"改动是
 - **S**：中小型企业官网结构差异大（静态 / JS 模板 / 可视化建站），人工清洗效率低。
 - **T**：一套系统自适应任意网站并自动化全流程。
 - **A**：Supervisor 多智能体 + 计划执行审查闭环 + LLM 关键节点介入 + 规则引擎。
-- **R**：hnbn666.cn 全站冒烟 `saved=6 / failed=0`；152 项单元测试全绿；
+- **R**：hnbn666.cn 全站冒烟 `saved=6 / failed=0`；161 项单元测试全绿；
   单次运行 26 条 trace 事件完整落盘；站点学习模式二次爬取 100% 命中；
-  RAG 检索 demo 对落盘页面建索引并命中正确栏目。
+  RAG 检索 demo 对落盘页面建索引并命中正确栏目；Golden 评估 3 个模板站点
+  （门户 / 电商 / 分页列表）离线跑通 P/R/F1 + 栏目发现率，compare_runs 量化回归。
 
 ## 6. 快速开始
 
@@ -171,7 +184,16 @@ playwright install chromium          # JS 模板站渲染用
 python -c "import asyncio; from graph.workflow import run_crawler; asyncio.run(run_crawler('https://example.com', max_steps=3000))"
 
 # 单元测试
-python -m pytest tests -q            # 152 passed
+python -m pytest tests -q            # 161 passed
+
+# 离线静态检查（自研 stdlib 版，等价 ruff F401/F403/F811/F821）
+python tools/static_check.py         # 41 文件 / 0 问题
+
+# Golden 离线评估（P/R/F1 + 栏目发现率，--json 机器可读）
+python tools/golden_check.py --offline --json
+
+# 回归对比（全指标 diff，REGRESSION 退出码 1）
+python tools/compare_runs.py baseline.json current.json
 
 # RAG 检索链路演示（对落盘 HTML 建索引 + 语义查询）
 python tools/rag_demo.py hnbn666
@@ -186,14 +208,14 @@ GUI 入口：`python site_crawler_gui.py`（博宇 · 网站爬取工具）。
 │                    #   + budget(成本/重试) + react(FC闭环) + semdedup(去重)
 │                    #   + vector_retriever(RAG检索) + eval(评估指标/LLM-judge)
 ├── graph/           # 编排级：workflow(Supervisor) / agents(8 Agent) / nodes(节点逻辑) / state(TypedDict)
-├── tests/           # 152 项单元测试（safety / plan / BaseAgent / 工具 / 工具安全
+├── tests/           # 161 项单元测试（safety / plan / BaseAgent / 工具 / 工具安全
 │                    #   / ReAct / 记账 / 去重 / RAG检索 / 评估指标 / FC评估链路
-│                    #   / 图装配冒烟）
+│                    #   / 图装配冒烟 / golden 指标闭环 / 回归对比）
 ├── tools/           # analyze_trace(轨迹分析) / golden_check(离线评估,支持--json/--offline)
-│                    #   / compare_runs(回归对比) / rag_demo(RAG检索演示)
+│                    #   / compare_runs(全指标回归对比) / static_check(自研静态检查) / rag_demo
 ├── memory.py        # SQLite 长期记忆（visited_urls / site_patterns）
 ├── schemas.py       # Pydantic 模型 + 日志
-├── .github/         # GitHub Actions CI（多版本 Python 跑 pytest）
+├── .github/         # GitHub Actions CI（多版本 Python：pytest + 双层静态检查 + golden 校验）
 ├── main.py          # 命令行入口
 └── site_crawler_gui.py  # Tkinter GUI
 ```
@@ -215,7 +237,11 @@ retriever over harvested pages (scored with Recall@k / NDCG@k) — plus a
 quantitative eval suite (P/R/F1, LLM-as-judge, run-to-run regression diff in CI),
 where the quality gate itself runs through a function-calling loop
 (LLM invokes a deterministic `quality_judge` tool before emitting its verdict).
-152 unit tests.
+An offline golden-set harness scores 3 template sites (portal / ecommerce /
+paged list) with P/R/F1 plus a section-recall metric, and a self-built
+stdlib-only static checker (F401/F403/F811/F821, cross-verified by ruff in CI)
+keeps the codebase clean.
+161 unit tests.
 
 **STAR template** (45–60s elevator pitch for English interviews):
 
@@ -225,5 +251,5 @@ where the quality gate itself runs through a function-calling loop
 > A: Supervisor multi-agent graph; plan → execute → review loop; LLM reserved
 > for decisions that need judgment; a rule engine for deterministic extraction;
 > memories, observability, and an offline golden-set eval to prove it.
-> R: End-to-end run on hnbn666.cn: 6/6 sections saved, 0 failures; 152 tests
+> R: End-to-end run on hnbn666.cn: 6/6 sections saved, 0 failures; 161 tests
 > green in CI; second crawl of the same site hit 100% memory reuse.

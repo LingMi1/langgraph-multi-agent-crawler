@@ -26,7 +26,6 @@ from typing import Any, Dict, List
 from urllib.parse import urlparse
 
 from agents.base import AgentContext, BaseAgent
-from .state import CrawlerState
 from .nodes import (
     scout_node,
     navigate_node,

@@ -24,7 +24,7 @@ agents/safety.py — Agent 安全层（提示注入防护 + 输出护栏）
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from schemas import agent_logger
 

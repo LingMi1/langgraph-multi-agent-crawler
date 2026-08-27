@@ -23,9 +23,8 @@ from __future__ import annotations
 import os
 import re
 import csv
-import json
 import asyncio
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Set
 from datetime import datetime
 from urllib.parse import urlparse
 

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import re
 import asyncio
-from typing import Optional
 from urllib.parse import urlparse
 
 import httpx

@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from typing import List, Optional, AsyncIterator
+from typing import List, AsyncIterator
 
 from .models import SiteProfile, NavLink, PageData, CrawlResult
 

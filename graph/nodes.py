@@ -70,7 +70,7 @@ from agents.extractor import (
     _compute_md5,
 )
 from agents.storage import FileSystemStorage, CSV_FIELDS
-from agents.models import SiteProfile, NavLink, PageData, CrawlResult
+from agents.models import SiteProfile, PageData
 from agents.llm_pipeline import get_prompt, chat_json, compress_html
 
 from schemas import agent_logger

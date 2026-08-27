@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import defaultdict
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 
 def estimate_tokens(text: str) -> int:
