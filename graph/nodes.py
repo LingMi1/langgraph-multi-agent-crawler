@@ -2833,8 +2833,8 @@ async def storage_node(state: CrawlerState) -> dict:
     csv_path = os.path.join(output_dir, "crawl_results.csv")
     agent_logger.info(f"[Graph::storage] 写入 CSV | path={csv_path} | rows={len(results)}")
 
-    # ★ CSV 瘦身：html 字段不存全量 HTML（含 base64 图，单行可达数 MB），
-    #   改存正文纯文本 + 图片 URL 列表，CSV 体积从数百 MB 降到 KB 级。
+    # ★ CSV 瘦身：html 列保留清洗后的 HTML 结构源码（去 script/style/base64 图），
+    #   而非纯文本正文；base64 图不写（单图可达 MB 级），远程 src 保留。
     #   HTML 文件本体不受影响（fetch/media 阶段已落盘）。
     for row in results:
         if row and isinstance(row, dict) and row.get("html"):
@@ -5100,10 +5100,12 @@ def _sanitize_dirname(name: str) -> str:
 # CSV 写入
 # ============================================================================
 
-def _slim_html_for_csv(html: str, max_imgs: int = 50) -> str:
-    """CSV 瘦身：全量 HTML（含 base64 图，单行可达数 MB）→ 正文纯文本 + 图片 URL 列表。
+def _slim_html_for_csv(html: str) -> str:
+    """CSV 瘦身：html 列保留**清洗后的 HTML 结构源码**（去 script/style/noscript
+    与内联 base64 图片，控制体积），而非纯文本正文。
 
-    图片 data URI 不写入（体积巨大），仅保留远程 URL；提取失败则截断原文兜底。
+    例: <html><body><h1>…</h1><p>…</p><img src="https://…">…</body></html>
+    base64 图片单图可达 MB 级，不写入 CSV（优先换回远程 data-src，无远程地址则丢弃）。
     """
     if not html:
         return ""
@@ -5111,19 +5113,22 @@ def _slim_html_for_csv(html: str, max_imgs: int = 50) -> str:
         soup = BeautifulSoup(html, "html.parser")
     except Exception:
         return html[:2000]
-    art = soup.select_one("article.content") or soup.find("body")
-    text = art.get_text("\n", strip=True) if art else ""
-    img_urls = []
+    for tag in soup.find_all(["script", "style", "noscript"]):
+        tag.decompose()
     for img in soup.find_all("img"):
-        src = img.get("src") or img.get("data-src") or ""
-        if src and not src.startswith("data:"):
-            img_urls.append(src)
-    parts = []
-    if text:
-        parts.append("【正文】\n" + text)
-    if img_urls:
-        parts.append("【图片URL】\n" + "\n".join(img_urls[:max_imgs]))
-    return "\n\n".join(parts) if parts else html[:2000]
+        src = img.get("src") or ""
+        data_src = img.get("data-src") or ""
+        if src.startswith("data:"):
+            if data_src:
+                img["src"] = data_src  # 换回远程地址
+            else:
+                img.decompose()  # 无远程地址的 base64 图丢弃
+        elif not src and data_src:
+            img["src"] = data_src
+    out = str(soup)
+    # 体积上限保护：超长截断（保留结构前缀），避免单行 CSV 过大
+    _MAX = 100_000
+    return out if len(out) <= _MAX else out[:_MAX]
 
 
 async def _write_csv(csv_path: str, rows: List[Dict[str, str]]) -> None:

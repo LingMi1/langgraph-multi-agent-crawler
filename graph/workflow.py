@@ -159,7 +159,7 @@ def build_app(seed_url: str, concurrency: int = 3) -> "tuple[Any, AgentContext]"
     构建一次运行所需的 (编译图, AgentContext)。
 
     每次 run_crawler 独立构建（LangGraph 编译开销可忽略）：
-      - TraceRecorder 落盘到 output/<netloc>/traces/trace_<ts>.jsonl
+      - TraceRecorder 仅内存记账（persist=False），不落盘 traces/trace_*.jsonl
       - 8 个编排级 Agent 共享同一 AgentContext（trace / llm / memory）
     """
     from urllib.parse import urlparse
@@ -169,13 +169,14 @@ def build_app(seed_url: str, concurrency: int = 3) -> "tuple[Any, AgentContext]"
     trace = TraceRecorder(
         output_dir=os.path.join(output_dir, netloc),
         run_id=time.strftime("%Y%m%d_%H%M%S"),
+        persist=False,  # ★ 不落盘 JSONL（不创建 traces/ 目录、不写 trace_*.jsonl）
     )
     ctx = AgentContext(trace=trace)
     agents = build_agents(ctx)
     graph = build_crawler_graph(agents)
     app = graph.compile()
     agent_logger.info(
-        f"[Graph::workflow] Supervisor 图已编译 | 8 Agents | trace={trace.path or '(无落盘)'}"
+        f"[Graph::workflow] Supervisor 图已编译 | trace={'落盘' if trace.path else '(不落盘)'}"
     )
     return app, ctx
 

@@ -50,11 +50,14 @@ class TraceRecorder:
       session_start / start / end / error / decision / review / plan
     """
 
-    def __init__(self, output_dir: str = "", run_id: Optional[str] = None):
+    def __init__(self, output_dir: str = "", run_id: Optional[str] = None,
+                 persist: bool = True):
         self.run_id = run_id or time.strftime("%Y%m%d_%H%M%S")
         self._seq = 0
         self._path = ""
-        if output_dir:
+        # persist=False 时只内存计数、不落盘（不创建 traces/ 目录、不写 trace_*.jsonl）
+        self._persist = persist
+        if output_dir and persist:
             traces_dir = os.path.join(output_dir, "traces")
             try:
                 os.makedirs(traces_dir, exist_ok=True)
