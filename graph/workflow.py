@@ -31,10 +31,12 @@ graph/workflow.py — LangGraph StateGraph 组装与编译（Supervisor 多智�
     │
     ▼
   [route_after_evaluate]
-    ├── passed=true ─────────► storage → END
+    ├── passed=true ─────────► media → storage → END
     ├── passed=false + 调整<3 → config_adjust → navigate (重抓)
     ├── passed=false + 调整≥3 + 未生成规则 → code_gen (LLM 最后保底) → navigate
-    └── passed=false + 调整≥3 + 已生成规则 → storage → END
+    └── passed=false + 已生成规则 → react (深降级 ReAct 接管)
+            ├── retry  → navigate (用新配置重抓)
+            └── giveup → media → storage → END
 
 每个节点的执行体是 Agent.run()（agents/base.py 模板方法）：
 轨迹记录（trace JSONL）+ 异常隔离（degraded 降级不打断整图）。
@@ -53,6 +55,7 @@ from .agents import build_agents
 from .nodes import (
     route_after_fetch,
     route_after_evaluate,
+    route_after_react,
 )
 from agents.base import AgentContext, BaseAgent, TraceRecorder
 from config import LOCAL_BACKUP_DIR
@@ -66,6 +69,7 @@ _AGENT_NODE_MAP: Dict[str, str] = {
     "evaluate": "evaluate_node",
     "config_adjust": "config_adjust_node",
     "code_gen": "code_gen_node",
+    "react": "react_node",
     "media_processor": "media_processor_node",
     "storage": "storage_node",
 }
@@ -118,6 +122,7 @@ def build_crawler_graph(agents: Dict[str, BaseAgent]) -> StateGraph:
             "media_processor_node": "media_processor_node",  # 通过/放弃 → 媒体处理
             "config_adjust_node": "config_adjust_node",      # 调整重来
             "code_gen_node": "code_gen_node",                # LLM 最后保底
+            "react_node": "react_node",                      # 深降级 ReAct 自主接管
             "storage_node": "storage_node",                  # 出错直接落盘
         },
     )
@@ -125,6 +130,16 @@ def build_crawler_graph(agents: Dict[str, BaseAgent]) -> StateGraph:
     # ── 调整 / 规则生成后回到导航（用新配置/规则重抓） ──
     graph.add_edge("config_adjust_node", "navigate_node")
     graph.add_edge("code_gen_node", "navigate_node")
+
+    # ── 深降级接管后：重试 → 导航重抓；放弃 → 媒体处理落盘 ──
+    graph.add_conditional_edges(
+        "react_node",
+        route_after_react,
+        {
+            "navigate_node": "navigate_node",          # 接管决策 retry → 用新配置重抓
+            "media_processor_node": "media_processor_node",  # 接管决策 giveup → 落盘
+        },
+    )
 
     # ── 媒体处理后落盘 ──
     graph.add_edge("media_processor_node", "storage_node")

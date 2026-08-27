@@ -169,3 +169,8 @@ class CrawlerState(TypedDict, total=False):
     # ── 停用信号 ──
     anti_crawl_blocked_urls: Dict[str, str]        # URL key → 拦截原因（反爬降级）
     _stop_flag: bool                   # 外部停止信号
+
+    # ── 深降级 ReAct 接管（确定性链路全失败后的自主接管） ──
+    react_attempted: bool              # 接管是否已触发（防死循环，一次性）
+    react_decision: str                # retry / giveup（可观测）
+    react_summary: str                 # 接管决策说明

@@ -1,7 +1,7 @@
 """tests/test_graph_smoke.py — 图装配离线冒烟测试（不联网）。
 
 验证 Supervisor 多智能体架构的关键装配点：
-  - build_agents 产出 8 个编排级 Agent（名称/职责齐全）
+  - build_agents 产出 9 个编排级 Agent（名称/职责齐全）
   - build_crawler_graph 注册全部节点并成功 compile
   - Agent 列表与 _AGENT_NODE_MAP 一一对应（缺 Agent 直接抛 KeyError）
 """
@@ -16,12 +16,13 @@ EXPECTED_AGENTS = {
     "evaluate",
     "config_adjust",
     "code_gen",
+    "react",
     "media_processor",
     "storage",
 }
 
 
-def test_build_agents_produces_8_agents(tmp_path):
+def test_build_agents_produces_9_agents(tmp_path):
     ctx = AgentContext(trace=TraceRecorder(output_dir=str(tmp_path)))
     agents = build_agents(ctx)
     assert set(agents.keys()) == EXPECTED_AGENTS

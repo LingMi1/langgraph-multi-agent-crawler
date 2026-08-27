@@ -10,13 +10,14 @@ graph/agents.py — 编排级 Agent 实现（Supervisor 多智能体模式）
   EvaluateAgent        审查者：评估爬取质量，对照任务计划检查完成度，决定下一步
   ConfigAdjustAgent    调整者：按评估建议调整爬虫配置并重抓（上限 3 次）
   CodeGenAgent         规则生成者：LLM 生成站点定制清洗规则（最后保底）
+  ReactTakeoverAgent   接管者：确定性链路全失败后 ReAct 自主接管（行动工具 + 多轮推理）
   MediaProcessorAgent  媒体处理者：图片过滤 / 外链化
   StorageAgent         存储者：结果落盘 CSV + 兜底重建
 
 职责边界（Supervisor 模式）：
   - workflow 是监督者，负责编排与条件路由
-  - EvaluateAgent 是审查 Agent：质量不过 → 交给 AdjustAgent 或 CodeGenAgent，
-    通过 → 放行 MediaProcessorAgent / StorageAgent
+  - EvaluateAgent 是审查 Agent：质量不过 → 交给 AdjustAgent / CodeGenAgent /
+    ReactTakeoverAgent，通过 → 放行 MediaProcessorAgent / StorageAgent
   - 每个 Agent 的决策会被 TraceRecorder 记录（可复现、可调试）
 """
 
@@ -36,6 +37,7 @@ from .nodes import (
     media_processor_node,
     storage_node,
 )
+from .react_takeover import react_takeover_node
 from schemas import agent_logger
 
 
@@ -357,7 +359,27 @@ class CodeGenAgent(BaseAgent):
 
 
 # ============================================================================
-# Agent 7: MediaProcessorAgent — 媒体处理者
+# Agent 7: ReactTakeoverAgent — 深降级接管者
+# ============================================================================
+
+class ReactTakeoverAgent(BaseAgent):
+    name = "react"
+    role = "接管者"
+    description = "确定性链路全失败后，ReAct 自主诊断并决策（行动工具 + 多轮推理）"
+    system_prompt = (
+        "你是爬虫系统的深降级接管 Agent。传统爬虫、配置调整与规则生成均失败时，"
+        "你使用行动工具（fetch_page / apply_config）自主诊断并决策重试或放弃。"
+    )
+
+    async def run_impl(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        return await react_takeover_node(state)
+
+    def _summarize_decision(self, result: Dict[str, Any]) -> str:
+        return "decision=%s" % result.get("react_decision", "giveup")
+
+
+# ============================================================================
+# Agent 8: MediaProcessorAgent — 媒体处理者
 # ============================================================================
 
 class MediaProcessorAgent(BaseAgent):
@@ -374,7 +396,7 @@ class MediaProcessorAgent(BaseAgent):
 
 
 # ============================================================================
-# Agent 8: StorageAgent — 存储者
+# Agent 9: StorageAgent — 存储者
 # ============================================================================
 
 class StorageAgent(BaseAgent):
@@ -428,6 +450,7 @@ def build_agents(ctx: AgentContext) -> Dict[str, BaseAgent]:
         EvaluateAgent(ctx),
         ConfigAdjustAgent(ctx),
         CodeGenAgent(ctx),
+        ReactTakeoverAgent(ctx),
         MediaProcessorAgent(ctx),
         StorageAgent(ctx),
     ]

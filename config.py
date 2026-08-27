@@ -13,6 +13,10 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+# 部分内网网关的 deepseek 系模型默认开启 thinking 推理模式，
+# 其 reasoning_content 在多轮工具调用续传时会 400（须回传）。
+# 置 true 时请求显式禁用 thinking，保证 FunctionCallingLoop/FC 裁决正常续传。
+DEEPSEEK_DISABLE_THINKING = os.getenv("DEEPSEEK_DISABLE_THINKING", "false").lower() in ("true", "1", "yes")
 
 
 def get_model_name() -> str:

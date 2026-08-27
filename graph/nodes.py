@@ -144,6 +144,8 @@ def _get_llm():
                 max_tokens=1024,
                 request_timeout=60,
                 http_client=httpx.Client(timeout=httpx.Timeout(60.0, connect=10.0)),
+                **({"extra_body": {"thinking": {"type": "disabled"}}}
+                   if config.DEEPSEEK_DISABLE_THINKING else {}),
             )
             # ★ 成本记账：包装客户端，所有 invoke/ainvoke 自动统计 token
             from agents.budget import TokenBudget, TrackedLLM
@@ -2872,11 +2874,13 @@ def route_after_evaluate(state: CrawlerState) -> str:
       - passed=True              → media_processor_node（Base64 化图片后落盘）
       - passed=False 且调整 < 3  → config_adjust_node（调整后重抓）
       - passed=False 且调整 ≥ 3 且未生成规则 → code_gen_node（LLM 最后保底）
-      - passed=False 且已生成规则 → media_processor_node（不再尝试）
+      - passed=False 且已生成规则且未接管 → react_node（深降级 ReAct 自主接管）
+      - passed=False 且接管已完成 → media_processor_node（不再尝试）
     """
     evaluation_dict = state.get("evaluation", {})
     adjustment_count = state.get("adjustment_count", 0)
     generation_attempted = state.get("generation_attempted", False)
+    react_attempted = state.get("react_attempted", False)
     error = state.get("error", "")
 
     if error:
@@ -2898,7 +2902,25 @@ def route_after_evaluate(state: CrawlerState) -> str:
         agent_logger.info("[Graph::route_eval] → code_gen (传统爬虫+调整均失败，LLM 最后保底)")
         return "code_gen_node"
 
-    agent_logger.info("[Graph::route_eval] → media_processor (已达最大调整次数且已尝试规则生成)")
+    # 规则已生成仍失败 → 深降级：ReAct 自主接管（一次性）
+    if not react_attempted:
+        agent_logger.info("[Graph::route_eval] → react (规则生成后仍失败，ReAct 自主接管)")
+        return "react_node"
+
+    agent_logger.info("[Graph::route_eval] → media_processor (接管已完成，保守落盘)")
+    return "media_processor_node"
+
+
+def route_after_react(state: CrawlerState) -> str:
+    """
+    react_node（深降级接管）完成后的路由:
+      - decision=retry  → navigate_node（用新配置重新抓取）
+      - 其他（giveup）  → media_processor_node（保守落盘）
+    """
+    if state.get("react_decision") == "retry":
+        agent_logger.info("[Graph::route_react] → navigate (接管决策：重试)")
+        return "navigate_node"
+    agent_logger.info("[Graph::route_react] → media_processor (接管决策：放弃)")
     return "media_processor_node"
 
 

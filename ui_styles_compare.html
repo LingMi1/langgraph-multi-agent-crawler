@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>输入框样式对比 · 深色专业工具主题</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: "Inter", "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: #0b0d12;
+    color: #e8ecf4;
+    min-height: 100vh;
+    padding: 40px 24px 80px;
+  }
+
+  .page-head { max-width: 1180px; margin: 0 auto 36px; }
+  .page-head h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
+  .page-head p { margin-top: 8px; color: #8a91a3; font-size: 14px; line-height: 1.7; }
+  .page-head code { color: #6ea8ff; font-family: "JetBrains Mono", monospace; }
+
+  .grid {
+    max-width: 1180px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 24px;
+  }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: #11141b;
+    border: 1px solid #1e2330;
+    border-radius: 18px;
+    padding: 26px 26px 32px;
+    display: flex;
+    flex-direction: column;
+  }
+  .panel .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: #0b0d12;
+    padding: 4px 12px;
+    border-radius: 999px;
+    width: fit-content;
+  }
+  .tag.a { background: #6ea8ff; }
+  .tag.b { background: #00ff9d; }
+  .tag.c { background: #c3a2ff; }
+  .tag.d { background: #ff7ad9; }
+  .panel h2 { margin-top: 14px; font-size: 18px; font-weight: 600; }
+  .panel .link {
+    margin-top: 6px; font-size: 13px; color: #8a91a3;
+    word-break: break-all;
+  }
+  .panel .link a { color: #6ea8ff; text-decoration: none; }
+  .panel .link a:hover { text-decoration: underline; }
+  .panel .eval { margin-top: 10px; font-size: 13px; line-height: 1.75; color: #aab1c3; }
+  .panel .eval b { color: #e8ecf4; font-weight: 600; }
+  .demo { flex: 1; margin-top: 26px; display: flex; align-items: center; justify-content: center; padding: 26px 12px; border-radius: 14px; min-height: 150px; }
+  .demo.glass-stage { position: relative; }
+
+  /* ============ 风格A：极简暗色 + 聚焦发光 ============ */
+  .min-glow { position: relative; width: 100%; max-width: 320px; }
+  .min-glow input {
+    background: #14161c;
+    border: 2px solid #2a2e3a;
+    padding: 14px 16px;
+    font-size: 15px;
+    font-family: inherit;
+    width: 100%;
+    border-radius: 12px;
+    color: #e8ecf4;
+    box-shadow: 0 2px 6px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.03);
+    transition: border-color .35s ease, box-shadow .35s ease,
+                transform .35s cubic-bezier(.68,-.55,.265,1.55),
+                background-color .35s ease;
+  }
+  .min-glow input::placeholder { color: #5a6170; transition: all .3s ease; }
+  .min-glow input:focus {
+    outline: none;
+    border-color: #4f8cff;
+    background: #151923;
+    box-shadow: 0 0 0 3px rgba(79,140,255,.14), 0 0 22px rgba(79,140,255,.28), inset 0 0 10px rgba(79,140,255,.06);
+    transform: translateY(-1px);
+  }
+  .min-glow input:focus::placeholder { opacity: 0; transform: translateX(10px); }
+
+  /* ============ 风格B：终端/赛博朋克 + 光标闪烁 + 呼吸灯 ============ */
+  .term {
+    position: relative;
+    width: 100%; max-width: 320px;
+    display: flex; align-items: center; gap: 8px;
+    padding: 2px 14px;
+    background: #0d0f12;
+    border: 2px solid rgba(0,255,157,.55);
+    border-radius: 8px;
+    font-family: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+    animation: breathe 2.4s ease-in-out infinite;
+    transition: transform .3s ease, box-shadow .3s ease;
+  }
+  .term:hover, .term:focus-within {
+    animation-play-state: paused;
+    transform: scale(1.02) rotateY(6deg);
+    box-shadow: 0 0 18px rgba(0,255,157,.45), 0 0 40px rgba(0,255,157,.15);
+  }
+  @keyframes breathe {
+    0%, 100% { box-shadow: 0 0 4px rgba(0,255,157,.15), 0 0 8px rgba(0,255,157,.08); border-color: rgba(0,255,157,.5); }
+    50%      { box-shadow: 0 0 16px rgba(0,255,157,.4),  0 0 32px rgba(0,255,157,.15); border-color: #00ff9d; }
+  }
+  .term-prompt {
+    color: #00ff9d;
+    font-size: 15px;
+    animation: blink 1s steps(1) infinite;
+  }
+  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+  .term input {
+    flex: 1;
+    background: transparent;
+    border: none; outline: none;
+    color: #d8ffe9;
+    font-family: inherit; font-size: 14px;
+    padding: 10px 0;
+    caret-color: #00ff9d;
+  }
+  .term input::placeholder { color: #2f6b4f; }
+
+  /* ============ 风格C：新拟物暗色 + 按下凹陷 ============ */
+  .neo { width: 100%; max-width: 320px; }
+  .neo input {
+    width: 100%;
+    padding: 15px 18px;
+    font-size: 15px;
+    font-family: inherit;
+    background: #1e1e2a;
+    border: none;
+    border-radius: 14px;
+    color: #cfd3e6;
+    box-shadow: -7px -7px 14px rgba(255,255,255,.045), 7px 7px 14px rgba(0,0,0,.5);
+    transition: box-shadow .3s ease, transform .12s ease, color .3s ease;
+  }
+  .neo input::placeholder { color: #6a6f86; }
+  .neo input:hover {
+    box-shadow: -9px -9px 18px rgba(255,255,255,.06), 9px 9px 18px rgba(0,0,0,.55);
+  }
+  .neo input:focus {
+    outline: none;
+    color: #9db5ff;
+    box-shadow: inset 5px 5px 10px rgba(0,0,0,.55), inset -5px -5px 10px rgba(255,255,255,.045);
+  }
+  .neo input:active {
+    transform: translateY(1px) scale(.995);
+    box-shadow: inset 7px 7px 12px rgba(0,0,0,.6), inset -7px -7px 12px rgba(255,255,255,.04);
+  }
+
+  /* ============ 风格D：玻璃拟态 + hover 模糊度变化 ============ */
+  .glass-stage {
+    background:
+      radial-gradient(circle at 18% 30%, rgba(79,140,255,.6), transparent 55%),
+      radial-gradient(circle at 82% 72%, rgba(255,0,153,.5), transparent 55%),
+      radial-gradient(circle at 60% 15%, rgba(0,255,157,.42), transparent 50%),
+      #14161f;
+  }
+  .glass-input {
+    width: 100%; max-width: 320px;
+    padding: 13px 16px;
+    font-size: 15px;
+    font-family: inherit;
+    background: rgba(255,255,255,.07);
+    border: 1px solid rgba(255,255,255,.16);
+    border-radius: 12px;
+    color: #f2f5ff;
+    backdrop-filter: blur(6px) saturate(150%);
+    -webkit-backdrop-filter: blur(6px) saturate(150%);
+    box-shadow: 0 8px 24px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.08);
+    transition: backdrop-filter .45s ease, -webkit-backdrop-filter .45s ease,
+                background-color .45s ease, border-color .45s ease,
+                box-shadow .45s ease;
+  }
+  .glass-input::placeholder { color: rgba(255,255,255,.45); }
+  .glass-input:hover {
+    backdrop-filter: blur(16px) saturate(190%);
+    -webkit-backdrop-filter: blur(16px) saturate(190%);
+    background: rgba(255,255,255,.13);
+    border-color: rgba(255,255,255,.38);
+    box-shadow: 0 12px 32px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.14);
+  }
+  .glass-input:focus {
+    outline: none;
+    backdrop-filter: blur(20px) saturate(200%);
+    -webkit-backdrop-filter: blur(20px) saturate(200%);
+    background: rgba(255,255,255,.16);
+    border-color: rgba(255,255,255,.55);
+    box-shadow: 0 14px 36px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.18);
+  }
+
+  .foot { max-width: 1180px; margin: 40px auto 0; font-size: 12px; color: #5c6374; line-height: 1.8; }
+</style>
+</head>
+<body>
+
+  <div class="page-head">
+    <h1>输入框样式对比 · 深色专业工具主题</h1>
+    <p>为桌面工具（pywebview / WebView2 嵌入）选型。4 种风格均为纯 CSS/HTML，动画全部由 <code>@keyframes</code> 与 <code>transition</code> 实现。悬停 / 聚焦即可看到动态效果。</p>
+  </div>
+
+  <div class="grid">
+
+    <!-- 风格A -->
+    <section class="panel">
+      <span class="tag a">风格 A</span>
+      <h2>极简暗色 · 聚焦发光</h2>
+      <div class="link">灵感来源：<a href="https://uiverse.io/0xnihilism/tricky-cow-79" target="_blank" rel="noopener">uiverse.io/0xnihilism/tricky-cow-79</a></div>
+      <p class="eval"><b>评价：</b>低干扰、专业感强。聚焦时边框色与多层外发光以 0.35s 平滑过渡，placeholder 同时滑出，弹跳缓动曲线（cubic-bezier 越界回弹）带来轻量灵动感。适合主搜索框 / URL 输入框。</p>
+      <div class="demo">
+        <div class="min-glow">
+          <input type="text" placeholder="搜索站点或关键词…" />
+        </div>
+      </div>
+    </section>
+
+    <!-- 风格B -->
+    <section class="panel">
+      <span class="tag b">风格 B</span>
+      <h2>终端 · 赛博朋克</h2>
+      <div class="link">灵感来源：<a href="https://uiverse.io/aboalsim114/selfish-fly-63" target="_blank" rel="noopener">uiverse.io/aboalsim114/selfish-fly-63</a></div>
+      <p class="eval"><b>评价：</b>原生深色 + 霓虹绿边框持续"呼吸"发光（@keyframes 2.4s 循环），左侧 ❯ 提示符 1s 步进闪烁模拟打字光标。悬停时暂停呼吸、轻微 3D 倾斜。终端感拉满，适合日志路径 / 命令行式输入。</p>
+      <div class="demo">
+        <div class="term">
+          <span class="term-prompt">❯</span>
+          <input type="text" placeholder="root@crawler:~$ 输入命令…" />
+        </div>
+      </div>
+    </section>
+
+    <!-- 风格C -->
+    <section class="panel">
+      <span class="tag c">风格 C</span>
+      <h2>新拟物暗色 · 按下凹陷</h2>
+      <div class="link">灵感来源：<a href="https://uiverse.io/adamgiebl/lucky-donkey-6" target="_blank" rel="noopener">uiverse.io/adamgiebl/lucky-donkey-6</a>（按压范式）+ 深色新拟物配方</div>
+      <p class="eval"><b>评价：</b>双向明暗阴影营造"从背景中浮起"的立体感。聚焦即从凸起凹陷为 inset（凹陷动画），按下时再加深并轻微下沉 1px，触感明确。无边框、极安静，适合表单主区域 / 设置面板。</p>
+      <div class="demo">
+        <div class="neo">
+          <input type="text" placeholder="API 地址…" />
+        </div>
+      </div>
+    </section>
+
+    <!-- 风格D -->
+    <section class="panel">
+      <span class="tag d">风格 D</span>
+      <h2>玻璃拟态 · 悬停变焦</h2>
+      <div class="link">灵感来源：<a href="https://uiverse.io/SteveBloX/dangerous-warthog-85" target="_blank" rel="noopener">uiverse.io/SteveBloX/dangerous-warthog-85</a> + <a href="https://uiverse.io/LilaRest/soft-baboon-75" target="_blank" rel="noopener">soft-baboon-75</a>（backdrop-filter 用法）</div>
+      <p class="eval"><b>评价：</b>半透明底 + backdrop-filter 毛玻璃，悬停时模糊度从 6px 平滑升至 16px（背景光斑随之化开），边框与亮度同步增强，聚焦再升至 20px。最有"漂浮感"，适合覆盖在彩色图表 / 数据可视化之上的浮动输入。</p>
+      <div class="demo glass-stage">
+        <input class="glass-input" type="text" placeholder="筛选数据…" />
+      </div>
+    </section>
+
+  </div>
+
+  <div class="foot">
+    说明：风格 A / B 基于 uiverse 真实输入框组件深色化改造；风格 C / D 因 uiverse 无现成深色输入组件，采用"uiverse 灵感来源 + 自研组合"。全部动画均为纯 CSS。pywebview 使用 WebView2 内核，backdrop-filter 可完整生效。
+  </div>
+
+</body>
+</html>
