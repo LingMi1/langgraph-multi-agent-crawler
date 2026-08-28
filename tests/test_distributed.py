@@ -53,11 +53,11 @@ def test_priority_ordering(q):
 
 def test_heartbeat_renews_lease(q):
     tid = q.enqueue("http://slow.com/")
-    q.claim("w1", lease_seconds=0.2)
-    time.sleep(0.05)
-    q.heartbeat("w1", lease_seconds=0.2)
-    time.sleep(0.18)
-    assert q.requeue_stale(lease_seconds=0.2) == 0  # 心跳续过，未过期
+    q.claim("w1", lease_seconds=0.3)
+    time.sleep(0.2)
+    q.heartbeat("w1", lease_seconds=0.5)  # 续租：deadline 从当前时刻重新起算
+    time.sleep(0.2)  # 总流逝 0.4s，但续租后 deadline 更晚（余量 0.3s，规避调度抖动）
+    assert q.requeue_stale(lease_seconds=0.5) == 0  # 心跳续过，未过期
     assert q.stats() == {"running": 1}
 
 

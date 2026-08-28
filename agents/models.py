@@ -12,7 +12,7 @@ import uuid
 from typing import List, Dict, Any
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ============================================================================
@@ -41,8 +41,7 @@ class SiteProfile(BaseModel):
     has_captcha: bool = Field(default=False, description="是否检测到验证码/人机校验")
     extra: Dict[str, Any] = Field(default_factory=dict, description="扩展字段")
 
-    class Config:
-        frozen = False
+    model_config = ConfigDict(frozen=False)
 
 
 # ============================================================================
@@ -80,8 +79,7 @@ class NavLink(BaseModel):
         description="来源导航元素的 DOM 路径/选择器 (调试用)"
     )
 
-    class Config:
-        frozen = False
+    model_config = ConfigDict(frozen=False)
 
 
 # ============================================================================
@@ -124,8 +122,7 @@ class PageData(BaseModel):
     )
     extra: Dict[str, Any] = Field(default_factory=dict, description="扩展字段")
 
-    class Config:
-        frozen = False
+    model_config = ConfigDict(frozen=False)
 
 
 # ============================================================================
@@ -160,5 +157,4 @@ class CrawlResult(BaseModel):
     file_path: str = Field(default="")
     content_hash: str = Field(default="")
 
-    class Config:
-        frozen = False
+    model_config = ConfigDict(frozen=False)
