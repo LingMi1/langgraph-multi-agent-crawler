@@ -118,9 +118,9 @@ class PageScout(ScoutAgentInterface):
         try:
             import asyncio
             loop = asyncio.get_running_loop()
-            from agents.fetcher import _ensure_playwright_sync, _fetch_with_playwright_sync
+            from agents.fetcher import _check_playwright_import, _fetch_with_playwright_sync
 
-            pw_ok = await loop.run_in_executor(None, _ensure_playwright_sync)
+            pw_ok = await loop.run_in_executor(None, _check_playwright_import)
             if pw_ok:
                 html, _, err = await loop.run_in_executor(
                     None, _fetch_with_playwright_sync, url
