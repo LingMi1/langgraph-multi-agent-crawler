@@ -9,7 +9,8 @@
 > （含质量评估核心链路）+ LLM-as-judge 评估 + **离线 Golden 指标闭环（P/R/F1 + 栏目发现率 +
 > 全指标回归对比）+ 双层静态检查（自研 stdlib 版 + ruff 交叉验证）** + **深降级 ReAct 自主接管
 > （行动工具 + 多轮推理，确定性链路全失败后的兜底）** + **LLM 运行级熔断
-> 与批量后置抢救（BFS 热路径零 LLM）** + 198 项单元测试 + **离线校招证据报告
+> 与批量后置抢救（BFS 热路径零 LLM）** + **MCP 标准协议接入（stdio server + client
+> 双向链路）** + 205 项单元测试 + **离线校招证据报告
 > （`reports/campus_report.md`，6 个真实站点 240 页落盘 + 评估循环量化）**。
 > 传统爬虫确定性为主、LLM 为辅，真实业务问题驱动。
 
@@ -220,6 +221,27 @@ hnbn666 触发 ReAct 接管 `decision=retry`），
 **1 次**（选择器持久化缓存命中后抢救阶段零 LLM）、批量抢救 4/4 成功（一次定位
 `article.grid_8 .content` 泛化全组，101–131 字正文救回）。
 
+### 3.15 MCP 标准协议接入（`tools/mcp_server.py` + `tools/mcp_client.py`）
+把项目的行动/分析工具暴露为 **MCP（Model Context Protocol）标准工具**——任何 MCP
+客户端（Claude Desktop / Cursor / 自研 Agent）即插即用，无需了解本项目内部代码：
+
+- **薄适配、工具单源**：MCP 层只做协议转换，`fetch_page`/`apply_config` 复用 ReAct
+  接管的执行器、`quality_judge` 复用 FC 评估链路的打分器——同一实现服务三条路径
+  （进程内 FC / ReAct 接管 / 跨进程 MCP），schema 与 `react_tools()` 同一口径；
+- **stdio 传输 + handler API**：基于官方 SDK 2.x（`mcp.server.lowlevel.Server` 构造式
+  `on_list_tools`/`on_call_tool`，FastMCP 2.0 起拆分为独立包）；
+- **fail-closed 错误通道**：未知工具 `isError=True` + 可诊断 JSON（与 ToolRegistry
+  同语义），工具异常不崩 server；
+- **client 双视角**：`tools/mcp_client.py` 演示协议全链路——initialize 握手 →
+  工具发现 → `call_tool`×3 → 错误通道验证，能讲 server 与 client 两端。
+
+**真实验证**（`python tools/mcp_client.py`）：握手 protocol=2025-11-25、发现 3 工具、
+`fetch_page` 对 zztzmjg.com 返回 200/25730 字节、`quality_judge` 打分、`apply_config`
+白名单钳制（request_delay=99 → 10.0）、未知工具 isError=True。
+
+与 FC 的边界（面试必问）：`FunctionCallingLoop` 是**进程内 LLM→工具**私有协议，
+MCP 是**跨进程/跨厂商标准协议**（JSON-RPC over stdio）——前者零开销，后者可组合。
+
 ## 4. 关键工程决策与踩坑
 
 - **规则 12/13（RuiQiCMS 可视化建站）**：纯图产品详情页正文仅 12–16 字，
@@ -239,7 +261,7 @@ hnbn666 触发 ReAct 接管 `decision=retry`），
 - **T**：一套系统自适应任意网站并自动化全流程。
 - **A**：Supervisor 多智能体 + 计划执行审查闭环 + LLM 关键节点介入 + 规则引擎。
 - **R**：6 个真实站点累计 240 页落盘（xnjzgc.cn 98 页 / zztzmjg.com 84 页）；
-  198 项单元测试全绿；评估循环实锤：4 次运行触发 12 次配置调整，
+  205 项单元测试全绿；评估循环实锤：4 次运行触发 12 次配置调整，
   xnjzgc.cn 保存量 1→98、zztzmjg.com 3→84；hnbn666.cn golden 离线 P/R/F1=1.0；
   站点学习模式二次爬取 100% 命中；`reports/campus_report.md` 全部指标离线可复现。
 
@@ -253,7 +275,10 @@ playwright install chromium          # JS 模板站渲染用
 python -c "import asyncio; from graph.workflow import run_crawler; asyncio.run(run_crawler('https://example.com', max_steps=3000))"
 
 # 单元测试
-python -m pytest tests -q            # 198 passed
+python -m pytest tests -q            # 205 passed
+
+# MCP 协议双向链路演示（stdio：握手→工具发现→call_tool→错误通道）
+python tools/mcp_client.py https://example.com/
 
 # 离线静态检查（自研 stdlib 版，等价 ruff F401/F403/F811/F821）
 python tools/static_check.py         # 41 文件 / 0 问题
@@ -283,12 +308,13 @@ GUI 入口（校招版双栏工作台）：`python desktop_app.py`（pywebview/W
 │                    #   + vector_retriever(RAG检索) + eval(评估指标/LLM-judge)
 ├── graph/           # 编排级：workflow(Supervisor) / agents(9 Agent) / nodes(节点逻辑) / state(TypedDict)
 │                    #   + react_takeover(深降级 ReAct 接管：行动工具 + 多轮推理)
-├── tests/           # 198 项单元测试（safety / plan / BaseAgent / 工具 / 工具安全
+├── tests/           # 205 项单元测试（safety / plan / BaseAgent / 工具 / 工具安全
 │                    #   / ReAct / 记账 / 去重 / RAG检索 / 评估指标 / FC评估链路
 │                    #   / 图装配冒烟 / golden 指标闭环 / 回归对比 / 深降级接管
-│                    #   / LLM熔断 + 批量抢救）
+│                    #   / LLM熔断 + 批量抢救 / MCP 工具层）
 ├── tools/           # analyze_trace(轨迹分析) / golden_check(离线评估,支持--json/--offline)
 │                    #   / compare_runs(全指标回归对比) / static_check(自研静态检查) / rag_demo
+│                    #   / mcp_server + mcp_client（MCP stdio 双向链路）
 │                    #   / gen_campus_report(校招证据报告 → reports/)
 ├── reports/         # campus_report.{md,json} 离线量化证据
 ├── webui/           # 校招版前端（双主题 / 统计面板 / toast / 拖拽 / 动态表单）
@@ -332,8 +358,10 @@ A run-level LLM circuit breaker (3 consecutive exhausted-retry failures →
 fast-fail for the rest of the run) plus batched post-hoc rescue (zero-LLM hot
 path, one selector-locate per URL-template group, degraded save when the LLM
 is unavailable) took a real site from "stalled overnight at 86 pages" to
-"full crawl in 85 s with 3 LLM calls".
-198 unit tests.
+"full crawl in 85 s with 3 LLM calls". Action/analysis tools are also exposed
+over MCP (stdio server + client, protocol 2025-11-25, single-source executors
+shared with the in-process FC path).
+205 unit tests.
 
 **STAR template** (45–60s elevator pitch for English interviews):
 
@@ -343,7 +371,7 @@ is unavailable) took a real site from "stalled overnight at 86 pages" to
 > A: Supervisor multi-agent graph; plan → execute → review loop; LLM reserved
 > for decisions that need judgment; a rule engine for deterministic extraction;
 > memories, observability, and an offline golden-set eval to prove it.
-> R: 6 real sites / 240 pages harvested (98 pages on one); 198 tests green in
+> R: 6 real sites / 240 pages harvested (98 pages on one); 205 tests green in
 > CI; evaluation loops fired 12 config adjustments across 4 runs (saved 1→98
 > on one site); hnbn666.cn golden P/R/F1 = 1.0 offline; a run-level LLM
 > circuit breaker + batched rescue cut one site from overnight stall to an
