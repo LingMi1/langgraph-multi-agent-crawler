@@ -123,23 +123,35 @@ class TrackedLLM:
         await asyncio.sleep(self.backoff * (attempt + 1))
 
     def invoke(self, prompt: str, **kwargs: Any) -> Any:
+        from agents.breaker import CircuitOpenError, llm_breaker
+        if not llm_breaker.check():
+            raise CircuitOpenError("LLM 熔断打开（本 run 停用），调用方降级")
         last_err = None
         for attempt in range(self.retries + 1):
             try:
-                return self._account(prompt, self._client.invoke(prompt, **kwargs))
+                resp = self._client.invoke(prompt, **kwargs)
+                llm_breaker.record_success()
+                return self._account(prompt, resp)
             except Exception as e:  # noqa: BLE001 - 调用层负责统一兜底
                 last_err = e
                 if attempt < self.retries:
                     self._backoff_sleep(attempt)
+        llm_breaker.record_failure(last_err)
         raise last_err
 
     async def ainvoke(self, prompt: str, **kwargs: Any) -> Any:
+        from agents.breaker import CircuitOpenError, llm_breaker
+        if not llm_breaker.check():
+            raise CircuitOpenError("LLM 熔断打开（本 run 停用），调用方降级")
         last_err = None
         for attempt in range(self.retries + 1):
             try:
-                return self._account(prompt, await self._client.ainvoke(prompt, **kwargs))
+                resp = await self._client.ainvoke(prompt, **kwargs)
+                llm_breaker.record_success()
+                return self._account(prompt, resp)
             except Exception as e:  # noqa: BLE001
                 last_err = e
                 if attempt < self.retries:
                     await self._abackoff_sleep(attempt)
+        llm_breaker.record_failure(last_err)
         raise last_err

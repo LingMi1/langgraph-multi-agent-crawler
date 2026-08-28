@@ -8,7 +8,8 @@
 > 全轨迹可观测 + 轻量 RAG（语义去重 + 向量检索 + Recall@k/NDCG@k 指标）+ Function Calling 闭环
 > （含质量评估核心链路）+ LLM-as-judge 评估 + **离线 Golden 指标闭环（P/R/F1 + 栏目发现率 +
 > 全指标回归对比）+ 双层静态检查（自研 stdlib 版 + ruff 交叉验证）** + **深降级 ReAct 自主接管
-> （行动工具 + 多轮推理，确定性链路全失败后的兜底）** + 181 项单元测试 + **离线校招证据报告
+> （行动工具 + 多轮推理，确定性链路全失败后的兜底）** + **LLM 运行级熔断
+> 与批量后置抢救（BFS 热路径零 LLM）** + 198 项单元测试 + **离线校招证据报告
 > （`reports/campus_report.md`，6 个真实站点 240 页落盘 + 评估循环量化）**。
 > 传统爬虫确定性为主、LLM 为辅，真实业务问题驱动。
 
@@ -199,6 +200,26 @@ react_node 触发 → LLM 多轮行动后收敛 **`decision=retry`** → 新配�
 hnbn666 触发 ReAct 接管 `decision=retry`），
 直接回答面试官的"你的指标是多少分 / 评估循环真的工作吗 / LLM 真的会动手吗"。
 
+### 3.14 LLM 运行级熔断 + 批量后置抢救（`agents/breaker.py`，BFS 热路径零 LLM）
+问题实锤：LLM 定位选择器曾挂在 BFS **每页同步热路径**——内网推理端点半死时单页重试超时
+30–60s，trafilatura 秒清成功仍被拖死，86 页后整夜停滞。解法是两件套：
+
+- **运行级熔断**：`LLMCircuitBreaker` 全局单例，**两个 LLM 入口统一接入**（`chat_json`
+  AsyncOpenAI 直连 / `TrackedLLM` langchain 包装）——连续 3 次调用失败（重试耗尽口径，
+  不放大内部单次重试）→ 本 run 熔断，后续调用**零等待快速失败**（调用方降级，不再等超时）；
+  单次成功清零；run 启动复位（GUI 多站连跑不互相污染）；**熔断只禁 LLM 不禁爬取**。
+- **批量后置抢救**：热路径零 LLM（`llm_locate` 只吃 SQLite 持久化缓存，未命中启发式兜底）；
+  正文不达标页（非功能页/二维码页）进 `rescue_queue`，evaluate 阶段按 **URL 模板分组**
+  （路径数字段→`{N}`），**每组只调一次 LLM 定位选择器、泛化整个栏目**；熔断打开/无 key/
+  定位失败/预算溢出（`RESCUE_MAX_PAGES`/`RESCUE_MAX_TEMPLATES`）→ **降级保存+标记**
+  （`rescued`/`rescue_degraded`/`rescue_skipped`/`rescue_dup`/`rescue_fetch_failed`
+  统计口径），Fetcher 缓存零网络重取——内容已支付抓取成本，绝不因 LLM 不可用而丢弃。
+
+**真实站点对比**（zztzmjg.com 同站实测）：旧代码 86 页停滞整夜（每页 LLM 超时 30s+）→
+新代码 **85 秒全站跑完**（329 次抓取/88 页保存/失败 0）、LLM 调用降到 **3 次**、复跑仅
+**1 次**（选择器持久化缓存命中后抢救阶段零 LLM）、批量抢救 4/4 成功（一次定位
+`article.grid_8 .content` 泛化全组，101–131 字正文救回）。
+
 ## 4. 关键工程决策与踩坑
 
 - **规则 12/13（RuiQiCMS 可视化建站）**：纯图产品详情页正文仅 12–16 字，
@@ -218,7 +239,7 @@ hnbn666 触发 ReAct 接管 `decision=retry`），
 - **T**：一套系统自适应任意网站并自动化全流程。
 - **A**：Supervisor 多智能体 + 计划执行审查闭环 + LLM 关键节点介入 + 规则引擎。
 - **R**：6 个真实站点累计 240 页落盘（xnjzgc.cn 98 页 / zztzmjg.com 84 页）；
-  181 项单元测试全绿；评估循环实锤：4 次运行触发 12 次配置调整，
+  198 项单元测试全绿；评估循环实锤：4 次运行触发 12 次配置调整，
   xnjzgc.cn 保存量 1→98、zztzmjg.com 3→84；hnbn666.cn golden 离线 P/R/F1=1.0；
   站点学习模式二次爬取 100% 命中；`reports/campus_report.md` 全部指标离线可复现。
 
@@ -232,7 +253,7 @@ playwright install chromium          # JS 模板站渲染用
 python -c "import asyncio; from graph.workflow import run_crawler; asyncio.run(run_crawler('https://example.com', max_steps=3000))"
 
 # 单元测试
-python -m pytest tests -q            # 181 passed
+python -m pytest tests -q            # 198 passed
 
 # 离线静态检查（自研 stdlib 版，等价 ruff F401/F403/F811/F821）
 python tools/static_check.py         # 41 文件 / 0 问题
@@ -262,9 +283,10 @@ GUI 入口（校招版双栏工作台）：`python desktop_app.py`（pywebview/W
 │                    #   + vector_retriever(RAG检索) + eval(评估指标/LLM-judge)
 ├── graph/           # 编排级：workflow(Supervisor) / agents(9 Agent) / nodes(节点逻辑) / state(TypedDict)
 │                    #   + react_takeover(深降级 ReAct 接管：行动工具 + 多轮推理)
-├── tests/           # 181 项单元测试（safety / plan / BaseAgent / 工具 / 工具安全
+├── tests/           # 198 项单元测试（safety / plan / BaseAgent / 工具 / 工具安全
 │                    #   / ReAct / 记账 / 去重 / RAG检索 / 评估指标 / FC评估链路
-│                    #   / 图装配冒烟 / golden 指标闭环 / 回归对比 / 深降级接管）
+│                    #   / 图装配冒烟 / golden 指标闭环 / 回归对比 / 深降级接管
+│                    #   / LLM熔断 + 批量抢救）
 ├── tools/           # analyze_trace(轨迹分析) / golden_check(离线评估,支持--json/--offline)
 │                    #   / compare_runs(全指标回归对比) / static_check(自研静态检查) / rag_demo
 │                    #   / gen_campus_report(校招证据报告 → reports/)
@@ -306,7 +328,12 @@ stdlib-only static checker (F401/F403/F811/F821, cross-verified by ruff in CI)
 keeps the codebase clean. A `tools/gen_campus_report.py` regenerates offline
 evidence (golden metrics + 6 real sites / 240 pages + evaluation-loop traces
 showing saved 1→98 on one site) into `reports/`.
-181 unit tests.
+A run-level LLM circuit breaker (3 consecutive exhausted-retry failures →
+fast-fail for the rest of the run) plus batched post-hoc rescue (zero-LLM hot
+path, one selector-locate per URL-template group, degraded save when the LLM
+is unavailable) took a real site from "stalled overnight at 86 pages" to
+"full crawl in 85 s with 3 LLM calls".
+198 unit tests.
 
 **STAR template** (45–60s elevator pitch for English interviews):
 
@@ -316,8 +343,9 @@ showing saved 1→98 on one site) into `reports/`.
 > A: Supervisor multi-agent graph; plan → execute → review loop; LLM reserved
 > for decisions that need judgment; a rule engine for deterministic extraction;
 > memories, observability, and an offline golden-set eval to prove it.
-> R: 6 real sites / 240 pages harvested (98 pages on one); 181 tests green in
+> R: 6 real sites / 240 pages harvested (98 pages on one); 198 tests green in
 > CI; evaluation loops fired 12 config adjustments across 4 runs (saved 1→98
-> on one site); hnbn666.cn golden P/R/F1 = 1.0 offline; second crawl of the
-> same site hit 100% memory reuse; all numbers reproducible offline via
+> on one site); hnbn666.cn golden P/R/F1 = 1.0 offline; a run-level LLM
+> circuit breaker + batched rescue cut one site from overnight stall to an
+> 85-second full crawl; all numbers reproducible offline via
 > `python tools/gen_campus_report.py`.

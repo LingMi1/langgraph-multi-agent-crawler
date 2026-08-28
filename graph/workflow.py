@@ -212,6 +212,13 @@ async def run_crawler(
 
     log(f"启动 LangGraph 多 Agent 爬虫 | 目标: {seed_url} | max_steps={max_steps} | concurrency={concurrency}")
 
+    # ★ 运行级熔断复位：每个 run 白纸启动（上一 run 的端点故障不带入本 run）
+    try:
+        from agents.breaker import llm_breaker
+        llm_breaker.reset()
+    except Exception:
+        pass
+
     app, ctx = build_app(seed_url, concurrency)
     initial_state: CrawlerState = {
         "seed_url": seed_url,
@@ -262,6 +269,16 @@ async def run_crawler(
     log(f"  跳过:       {stats.get('skipped', 0)}")
     log(f"  重复:       {stats.get('duplicate', 0)}")
     log(f"  失败:       {stats.get('failed', 0)}")
+    if stats.get("rescue_candidates"):
+        log(f"  批量抢救:   候选={stats.get('rescue_candidates', 0)} | "
+            f"成功={stats.get('rescued', 0)} | 降级保存={stats.get('rescue_degraded', 0)} | "
+            f"跳过={stats.get('rescue_skipped', 0) + stats.get('rescue_dup', 0)}")
+    try:
+        from agents.breaker import llm_breaker
+        if llm_breaker.open:
+            log(f"  熔断:       LLM 本 run 已熔断 | {llm_breaker.reason[:80]}")
+    except Exception:
+        pass
     if blocked_urls:
         log(f"  🛡️ 反爬拦截:  {len(blocked_urls)} 个 (高级反爬爬不了)")
         for uk, reason in list(blocked_urls.items())[:5]:

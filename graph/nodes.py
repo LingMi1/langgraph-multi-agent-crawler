@@ -165,10 +165,16 @@ def get_budget_summary() -> str:
 
 
 def reset_llm():
-    """强制重置 LLM 客户端与成本账，使下次调用使用最新的 config 值"""
+    """强制重置 LLM 客户端与成本账，使下次调用使用最新的 config 值；
+    同时复位运行级熔断器（新 run 白纸启动，端点恢复自然重试）"""
     global _llm_client, _llm_budget
     _llm_client = None
     _llm_budget = None
+    try:
+        from agents.breaker import llm_breaker
+        llm_breaker.reset()
+    except Exception:
+        pass
 
 
 # ============================================================================
@@ -1162,12 +1168,14 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
     # 共享状态容器由各子任务就地修改（asyncio 单线程协作式，无 await 间隙的
     # list/dict 操作天然原子），主函数仅聚合各子任务新增的 crawled_results。
     blocked_urls: Dict[str, str] = dict(state.get("anti_crawl_blocked_urls", {}))
+    # ★ 批量后置抢救：热路径收集的质量不达标页（正文过短等），evaluate 阶段统一处理
+    rescue_queue: List[Dict] = list(state.get("rescue_queue", []) or [])
     batch = [queue.pop(0) for _ in range(min(concurrency, len(queue)))]
     gathered = await asyncio.gather(
         *[
             _process_one_url(
                 item, queue, stats, seen_keys, seen_hashes, retry_map, blocked_urls,
-                profile, config_dict, output_dir, site_name, seed_url,
+                rescue_queue, profile, config_dict, output_dir, site_name, seed_url,
                 extraction_rules, nav_mapping, nav_names, media_processed_keys,
                 state.get("progress_callback"),
             )
@@ -1191,6 +1199,7 @@ async def fetch_extract_node(state: CrawlerState) -> dict:
         "seen_hashes": seen_hashes,
         "url_retry_count": retry_map,
         "anti_crawl_blocked_urls": blocked_urls,
+        "rescue_queue": rescue_queue,
         "crawled_results": crawled_results,
     }
 
@@ -1203,6 +1212,7 @@ async def _process_one_url(
     seen_hashes: List[str],
     retry_map: Dict[str, int],
     blocked_urls: Dict[str, str],
+    rescue_queue: List[Dict],
     profile: Optional[SiteProfile],
     config_dict: Dict[str, Any],
     output_dir: str,
@@ -1217,8 +1227,8 @@ async def _process_one_url(
     """
     单 URL 抓取+清洗（fetch_extract_node 的并发子任务）。
 
-    共享可变状态（queue/stats/seen_*/retry/blocked）由调用方传入并就地更新；
-    返回值仅为该 URL 新增的 crawled_results 行（无则空列表）。
+    共享可变状态（queue/stats/seen_*/retry/blocked/rescue_queue）由调用方传入
+    并就地更新；返回值仅为该 URL 新增的 crawled_results 行（无则空列表）。
     """
     url = item["url"]
     depth = item.get("depth", 1)
@@ -1664,6 +1674,9 @@ async def _process_one_url(
     # ── 构建模板 HTML（结构化 + 固定排版）──
     # ★ BFS+LLM 整合：详情页用两段式 LLM 定位正文容器（URL 形态模板缓存，同站同模板只调一次 LLM），
     #   列表页/栏目页保持代码启发式（BS4），速度不受影响
+    # ★ 批量后置抢救改造（grill 定稿）：热路径 allow_llm=False 只吃缓存命中——
+    #   缓存未命中零 LLM 延迟直接启发式兜底；正文不达标的页进 rescue_queue，
+    #   由 evaluate 阶段统一调 LLM 定位（一次泛化整个栏目模板）。
     llm_selector = ""
     # ★ 规则 13：纯图片产品详情页跳过 LLM 选择器——正文容器确定是 .product_content
     #   （含 product_content_title 标题 + product_content_img/procontent 产品图）。
@@ -1671,7 +1684,7 @@ async def _process_one_url(
     #   曾错选全局轮播 banner 模块，产品标题/产品图全丢（落盘只剩轮播图+Previous/Next）。
     if not is_list and not _pure_img_detail:
         llm_selector = await _llm_locate_content_selector(
-            rescued_html, url, seed_url, site_name
+            rescued_html, url, seed_url, site_name, allow_llm=False
         )
     structured_body = _build_structured_content(
         rescued_html, url,
@@ -1762,6 +1775,26 @@ async def _process_one_url(
     #   page.html 替换成 trafilatura 产物，product_content_title 已被剥离）。
     if (len(_check_text) < 80 or ((_is_qr_page or _is_func_page) and len(_check_text) < 200)) and not _pure_img_detail:
         _drop_tag = '/二维码聚合页' if _is_qr_page else ('/功能页' if _is_func_page else '')
+        # ★ 批量后置抢救（grill 定稿）：非功能页/二维码页的过短正文 → 进 rescue_queue，
+        #   内容已支付抓取成本（Fetcher 缓存可零网络重取），不在热路径调 LLM，
+        #   由 evaluate 阶段统一抢救或降级保存。功能页/二维码页本身低价值，不抢救。
+        if not _is_qr_page and not _is_func_page:
+            _rk = _url_key(url)
+            if not any(r.get("url_key") == _rk for r in rescue_queue):
+                rescue_queue.append({
+                    "url": url,
+                    "url_key": _rk,
+                    "nav_path": list(nav_path),
+                    "depth": depth,
+                    "reason": "content_too_short",
+                    "text_len": len(_check_text),
+                    "imgs": len(re.findall(r'<img\b', structured_body or "", re.I)),
+                    "title": (cleaned.title or "")[:120],
+                })
+                agent_logger.info(
+                    f"[Graph::fetch_extract] 正文过短入抢救队列({len(_check_text)}字) "
+                    f"| rescue_queue={len(rescue_queue)} | {url[:60]}"
+                )
         agent_logger.info(
             f"[Graph::fetch_extract] 正文过短({len(_check_text)}字){_drop_tag}，丢弃 | {url[:60]}"
         )
@@ -1863,6 +1896,226 @@ async def _process_one_url(
 
 
 # ============================================================================
+# 批量后置抢救（grill 定稿）：BFS 热路径零 LLM，evaluate 阶段统一抢救
+#   1. 热路径只吃选择器缓存命中，未命中启发式兜底，不达标页进 rescue_queue
+#   2. BFS 结束进 evaluate 前批量抢救：按 URL 模板分组，每组只调一次 LLM 定位
+#      选择器（泛化整个栏目模板），成功 → 用 selector 重建正文正常保存
+#   3. LLM 不可用（无 key / 熔断打开）/ 定位失败 / 预算耗尽 → 降级保存+标记：
+#      确定性清洗结果直接落盘（内容已支付抓取成本，Fetcher 缓存零网络重取）
+# ============================================================================
+
+def _rescue_text_len(html_str: str) -> int:
+    """去标签后的正文长度（与热路径 _check_text 同口径）。"""
+    t = re.sub(r'<[^>]+>', '', html_str or "")
+    return len(re.sub(r'\s+', '', t))
+
+
+async def _rescue_fetch_html(url: str, profile, config_dict: Dict) -> str:
+    """抢救阶段重取页面 HTML：FetcherRouter 缓存命中零网络（内容已支付成本）。"""
+    try:
+        fetcher = _get_fetcher(config_dict)
+        page = await fetcher.fetch(url, profile)
+        return page.html or ""
+    except Exception as e:  # noqa: BLE001
+        agent_logger.warning(f"[Graph::rescue] 重取失败: {e} | {url[:60]}")
+        return ""
+
+
+async def _rescue_process_entry(
+    e: Dict, selector: str, skip_reason: str,
+    profile, config_dict: Dict, output_dir: str, site_name: str,
+    seen_hashes: List[str],
+) -> Tuple[Optional[Dict], str]:
+    """
+    抢救单个候选页：重建正文 → 去重 → 落盘 → CSV 行。
+
+    selector 非空 → 模板定位成功路径（重建正文，正文≥80字记 rescued）；
+    selector 为空（定位失败/熔断/预算耗尽）→ 降级保存路径（rescue_degraded，
+    skip_reason 记入日志与统计）。真空页（<30字且无图）不保存（rescue_skipped）。
+    返回 (csv_row | None, outcome)；outcome ∈ rescued/rescue_degraded/
+    rescue_skipped/rescue_dup/rescue_fetch_failed。
+    """
+    url = e.get("url", "")
+    nav_path = list(e.get("nav_path") or [])
+    if not url:
+        return None, "rescue_skipped"
+
+    loop = asyncio.get_running_loop()
+    page_html = await _rescue_fetch_html(url, profile, config_dict)
+    if not page_html or len(page_html) < 100:
+        return None, "rescue_fetch_failed"
+    rescued_html, _ = await loop.run_in_executor(None, _rescue_images, page_html, url)
+
+    # 正文重建：selector 命中体与代码启发式体二选优（定位失误时启发式兜底）
+    body = _build_structured_content(rescued_html, url, content_selector=selector)
+    if selector:
+        heur = _build_structured_content(rescued_html, url, content_selector="")
+        if _rescue_text_len(heur) > _rescue_text_len(body):
+            body = heur
+    text_len = _rescue_text_len(body)
+    imgs = len(re.findall(r'<img\b', body, re.I))
+
+    if text_len < 30 and imgs < 1:
+        return None, "rescue_skipped"
+
+    # 去重：与热路径同口径（结构化正文 + 标题）
+    content_hash = _compute_md5(body + "\x00" + (e.get("title") or ""))
+    if content_hash and content_hash in seen_hashes:
+        return None, "rescue_dup"
+    if content_hash:
+        seen_hashes.append(content_hash)
+
+    template_html = _build_template_html(
+        structured_body=body,
+        title=e.get("title", ""),
+        nav_path=nav_path,
+        source_url=url,
+    )
+    template_html = _strip_nav_noise(template_html)
+    try:
+        _, img_urls, img_alts = _collect_images(template_html)
+    except Exception:
+        img_urls, img_alts = [], []
+    pd = PageData(
+        url=url,
+        title=e.get("title", ""),
+        html=template_html,
+        nav_path=nav_path,
+        depth=int(e.get("depth") or 1),
+        images_count=imgs,
+        images_urls=img_urls[:20],
+        images_alts=img_alts[:20],
+        content_hash=content_hash,
+    )
+    rel_path = await _save_html_file(pd, output_dir)
+    csv_row = _build_csv_row(pd, site_name, nav_path)
+    csv_row["file_path"] = rel_path
+    outcome = "rescued" if (text_len >= 80 and selector) else "rescue_degraded"
+    agent_logger.info(
+        f"[Graph::rescue] {'抢救成功' if outcome == 'rescued' else '降级保存'}"
+        f"{'(' + skip_reason + ')' if skip_reason else ''} | text={text_len} | "
+        f"imgs={imgs} | selector={selector or '-'} | {url[:60]}"
+    )
+    return csv_row, outcome
+
+
+async def _rescue_pending_pages(
+    state: CrawlerState,
+) -> Tuple[List[Dict], Dict[str, int], Optional[List[str]]]:
+    """
+    Evaluate 阶段批量抢救入口（evaluate_node 在 LLM 评估之前调用）。
+
+    返回 (新增 crawled_results 行, 统计增量, 更新后的 seen_hashes)。
+    seen_hashes 为 None 表示未消费队列（调用方不得写回，避免清空状态）。
+    LLM 定位阶段可能触发熔断（端点半死）——中途打开则剩余模板走降级保存，
+    不会拖慢收尾。
+    """
+    from agents.breaker import llm_breaker
+
+    entries = list(state.get("rescue_queue", []) or [])
+    if not entries:
+        return [], {}, None
+
+    # 预算兜底：候选过多时截断（防大站雪崩）
+    max_pages = max(1, int(getattr(config, "RESCUE_MAX_PAGES", 60)))
+    overflow = []
+    if len(entries) > max_pages:
+        overflow = entries[max_pages:]
+        entries = entries[:max_pages]
+
+    seed_url = state.get("seed_url", "")
+    site_name = state.get("site_name", "")
+    output_dir = state.get("output_dir", "")
+    config_dict = state.get("crawler_config", {}) or {}
+    profile_dict = state.get("site_profile", {}) or {}
+    profile = SiteProfile(**profile_dict) if profile_dict else None
+    seen_hashes: List[str] = list(state.get("seen_hashes", []) or [])
+
+    stats_inc: Dict[str, int] = {"rescue_candidates": len(entries) + len(overflow)}
+    rows: List[Dict] = []
+
+    llm_usable = bool(config.DEEPSEEK_API_KEY) and llm_breaker.check()
+    agent_logger.info(
+        f"[Graph::rescue] 批量抢救开始 | 候选={len(entries)}"
+        f"{'+' + str(len(overflow)) + '超预算' if overflow else ''} | "
+        f"LLM={'可用' if llm_usable else '不可用→降级保存'}"
+    )
+
+    # ── 模板分组：同 URL 形态只调一次 LLM 定位（泛化整个栏目） ──
+    def _tkey(u: str) -> str:
+        return f"{urlparse(u).netloc}|{_url_template_key(u)}"
+
+    located: Dict[str, str] = {}
+    locate_failed: set = set()
+    if llm_usable:
+        groups: Dict[str, List[Dict]] = {}
+        for e in entries:
+            groups.setdefault(_tkey(e.get("url", "")), []).append(e)
+        max_tpl = max(1, int(getattr(config, "RESCUE_MAX_TEMPLATES", 6)))
+        ordered = sorted(groups.items(), key=lambda kv: -len(kv[1]))
+        for tkey, group in ordered:
+            if len(located) >= max_tpl:
+                locate_failed.add(tkey)  # 模板预算耗尽 → 组内降级保存
+                continue
+            rep = group[0]
+            html = await _rescue_fetch_html(rep.get("url", ""), profile, config_dict)
+            if not html or len(html) < 100:
+                locate_failed.add(tkey)
+                continue
+            selector = await _llm_locate_content_selector(
+                html, rep.get("url", ""), seed_url, site_name, allow_llm=True
+            )
+            if selector:
+                located[tkey] = selector
+            else:
+                locate_failed.add(tkey)
+            if not llm_breaker.check():
+                # 定位途中熔断打开：剩余模板全部降级保存（不在半死端点上继续等）
+                for tk2 in groups:
+                    if tk2 not in located:
+                        locate_failed.add(tk2)
+                agent_logger.warning(
+                    "[Graph::rescue] 抢救定位阶段熔断打开，剩余模板降级保存"
+                )
+                break
+
+    # ── 逐页处理（已定位模板用 selector 重建；未定位/失败/溢出降级保存） ──
+    async def _run_one(e: Dict, forced_skip: str = "") -> None:
+        selector = located.get(_tkey(e.get("url", "")), "")
+        row, outcome = await _rescue_process_entry(
+            e, selector, forced_skip, profile, config_dict,
+            output_dir, site_name, seen_hashes,
+        )
+        stats_inc[outcome] = stats_inc.get(outcome, 0) + 1
+        if row:
+            rows.append(row)
+
+    for e in entries:
+        tkey = _tkey(e.get("url", ""))
+        if not config.DEEPSEEK_API_KEY:
+            skip = "no_llm"
+        elif not llm_breaker.check():
+            skip = "circuit_open"
+        elif tkey in locate_failed:
+            skip = "locate_failed"
+        else:
+            skip = ""
+        await _run_one(e, skip)
+    for e in overflow:
+        await _run_one(e, "budget")
+
+    if rows or stats_inc:
+        agent_logger.info(
+            f"[Graph::rescue] 批量抢救完成 | 抢救={stats_inc.get('rescued', 0)} | "
+            f"降级保存={stats_inc.get('rescue_degraded', 0)} | "
+            f"跳过={stats_inc.get('rescue_skipped', 0)} | "
+            f"重复={stats_inc.get('rescue_dup', 0)} | "
+            f"重取失败={stats_inc.get('rescue_fetch_failed', 0)}"
+        )
+    return rows, stats_inc, seen_hashes
+
+
+# ============================================================================
 # Node 4: LLM 评估（仅在传统爬虫完成 queue 后调用）
 # ============================================================================
 
@@ -1880,10 +2133,24 @@ async def evaluate_node(state: CrawlerState) -> dict:
     返回 {passed, score, issues, suggestion} → 条件路由决定下一步。
     """
     results: List[Dict] = list(state.get("crawled_results", []))
-    stats = state.get("stats", {})
+    stats = dict(state.get("stats", {}))
     site_name = state.get("site_name", "")
     adjustment_count = state.get("adjustment_count", 0)
     seed_url = state.get("seed_url", "")
+
+    # ── 批量后置抢救（grill 定稿）：评估前统一抢救热路径收集的不达标页 ──
+    # 抢救产物并入 results/stats → 评估看到的是最终状态；rescue_queue 清空消费。
+    rescue_seen: Optional[List[str]] = None
+    try:
+        rescue_rows, rescue_stats, rescue_seen = await _rescue_pending_pages(state)
+    except Exception as e:  # noqa: BLE001 — 抢救失败不阻断评估主链路
+        agent_logger.warning(f"[Graph::rescue] 批量抢救异常（跳过，不阻断评估）: {e}")
+        rescue_rows, rescue_stats = [], {}
+    if rescue_rows or rescue_stats:
+        results.extend(rescue_rows)
+        for k, v in rescue_stats.items():
+            stats[k] = stats.get(k, 0) + v
+        stats["saved"] = stats.get("saved", 0) + len(rescue_rows)
 
     # ── 无 LLM 时的降级：纯启发式评估 ──
     llm = _get_llm()
@@ -1919,11 +2186,20 @@ async def evaluate_node(state: CrawlerState) -> dict:
         f"source={eval_source} | adjustment_count={adjustment_count} | {evaluation.summary}"
     )
 
-    return {
+    ret = {
         "evaluation": evaluation.model_dump(),
         "adjustment_count": adjustment_count,  # 不在这里递增
         "eval_source": eval_source,  # heuristic / llm_text / llm_fc（可观测）
+        "stats": stats,             # 含 rescue_* 抢救统计
+        "crawled_results": rescue_rows,  # 抢救新增行（reducer 追加；无则空）
+        "rescue_queue": [],         # 已消费清空（重抓后新不达标页会重新入队）
     }
+    # ★ 抢救落盘的 hash 写回（None=未消费队列，不写键，避免覆盖清空 fetch 累积）：
+    #   评估调整会重置 seen_url_keys 重爬，同批不达标页可能二次入队，
+    #   seen_hashes 拦截其二次落盘（记 rescue_dup）。
+    if rescue_seen is not None:
+        ret["seen_hashes"] = rescue_seen
+    return ret
 
 
 # ============================================================================
@@ -3840,13 +4116,19 @@ def _selector_quality_ok(html: str, selector: str) -> bool:
 
 
 async def _llm_locate_content_selector(
-    html: str, page_url: str, home_url: str, gsmc: str
+    html: str, page_url: str, home_url: str, gsmc: str,
+    allow_llm: bool = True,
 ) -> str:
     """
     两段式 LLM 定位正文容器：返回 CSS 选择器（如 '#content' / '.article-body'）。
     命中 URL 形态缓存直接返回（带质量校验，不合格则弃缓存重定位）；
     未命中才调 LLM，定位成功后泛化（#vsb_content_1003 → [id^="vsb_content_"]）并缓存。
     失败/无 selector → 返回 ""，调用方回退到代码启发式 _find_main_content。
+
+    ★ 批量后置抢救（grill 定稿）：allow_llm=False 时 BFS 热路径"只吃缓存"——
+      缓存未命中/校验失败不再同步调 LLM（消除每页 30s+ 超时重试），
+      直接返回 "" 走代码启发式；LLM 定位延迟到 evaluate 阶段批量抢救
+      （一次定位泛化整个栏目模板），调用方见 graph/nodes._rescue_pending_pages。
     """
     if not html:
         return ""
@@ -3863,6 +4145,13 @@ async def _llm_locate_content_selector(
         )
         del _CONTENT_SELECTOR_CACHE[ckey]
         _save_selector_cache()
+        if not allow_llm:
+            # 热路径：不调 LLM，启发式兜底；模板定位延迟到批量抢救阶段
+            return ""
+
+    if not allow_llm:
+        # 热路径缓存未命中：零 LLM 延迟，启发式兜底
+        return ""
 
     try:
         prompt = get_prompt("清洗提示词.txt")

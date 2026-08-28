@@ -170,6 +170,9 @@ class CrawlerState(TypedDict, total=False):
     anti_crawl_blocked_urls: Dict[str, str]        # URL key → 拦截原因（反爬降级）
     _stop_flag: bool                   # 外部停止信号
 
+    # ── 批量后置抢救（grill 定稿：BFS 热路径零 LLM，不达标页收集到 evaluate 阶段统一抢救） ──
+    rescue_queue: List[Dict[str, Any]]    # [{url, url_key, nav_path, depth, reason, text_len, imgs, title}]
+
     # ── 深降级 ReAct 接管（确定性链路全失败后的自主接管） ──
     react_attempted: bool              # 接管是否已触发（防死循环，一次性）
     react_decision: str                # retry / giveup（可观测）

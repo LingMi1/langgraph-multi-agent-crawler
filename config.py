@@ -77,6 +77,15 @@ ADAPTIVE_LLM_QUALITY_THRESHOLD = float(os.getenv("ADAPTIVE_LLM_QUALITY_THRESHOLD
 # 单次运行升级上限：疑难页过多时熔断，防止 LLM 被全篇清洗打爆
 ADAPTIVE_LLM_MAX_UPGRADES = int(os.getenv("ADAPTIVE_LLM_MAX_UPGRADES", "50"))
 
+# ==================== LLM 运行级熔断 + 批量抢救配置（grill 定稿） ====================
+# 连续 N 次 LLM 调用失败（重试耗尽口径）→ 本 run 熔断：LLM 入口快速失败，
+# 确定性链路全速继续（zztzmjg 实测：半死端点每页 30s+ 超时重试拖垮 BFS 主链路）
+LLM_BREAKER_THRESHOLD = int(os.getenv("LLM_BREAKER_THRESHOLD", "3"))
+# Evaluate 阶段批量抢救：最多为多少个 URL 模板调 LLM 定位（一次定位泛化整个栏目）
+RESCUE_MAX_TEMPLATES = int(os.getenv("RESCUE_MAX_TEMPLATES", "6"))
+# 批量抢救单 run 最多处理多少候选页（预算兜底，防大站雪崩）
+RESCUE_MAX_PAGES = int(os.getenv("RESCUE_MAX_PAGES", "60"))
+
 # ==================== Phase 2: HITL 人工介入配置 ====================
 HITL_BATCH_SAVE_THRESHOLD = int(os.getenv("HITL_BATCH_SAVE_THRESHOLD", "1000"))  # 单次保存超过此数量触发中断
 HITL_TOKEN_COST_THRESHOLD = float(os.getenv("HITL_TOKEN_COST_THRESHOLD", "10.0"))  # Token 累计费用超过 $10 触发中断

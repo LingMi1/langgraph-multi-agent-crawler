@@ -87,10 +87,18 @@ async def chat_json(
     """
     调用 LLM 并要求返回 JSON。返回解析后的 dict；重试失败返回 None。
     从响应中容错提取 JSON（去 ```json 围栏、取首个 { ... } 平衡块）。
+
+    ★ 运行级熔断（agents/breaker.py）：熔断打开时直接返回 None（零等待），
+      调用方按"无 LLM"降级——llm_locate 回退代码启发式、导航分类回退规则。
+      一次调用成功 → 计数清零；重试全部耗尽 → 记 1 次连续失败。
     """
+    from agents.breaker import llm_breaker
+
     client = _get_llm()
     if client is None:
         agent_logger.error("[LLM] 客户端未初始化（检查 DEEPSEEK_API_KEY）")
+        return None
+    if not llm_breaker.check():
         return None
     last_err = ""
     for attempt in range(retries + 1):
@@ -109,6 +117,7 @@ async def chat_json(
                 agent_logger.warning(f"[LLM] 返回空 content（finish={resp.choices[0].finish_reason}），可能是 reasoning 模型 token 耗尽")
             parsed = _parse_json(text)
             if parsed is not None:
+                llm_breaker.record_success()
                 return parsed
             last_err = "JSON 解析失败"
         except Exception as e:
@@ -116,6 +125,7 @@ async def chat_json(
         agent_logger.warning(f"[LLM] 调用失败(重试{attempt + 1}/{retries + 1}): {last_err}")
         if attempt < retries:
             await asyncio.sleep(2.0 * (attempt + 1))
+    llm_breaker.record_failure(last_err)
     return None
 
 
