@@ -10,7 +10,8 @@
 > 全指标回归对比）+ 双层静态检查（自研 stdlib 版 + ruff 交叉验证）** + **深降级 ReAct 自主接管
 > （行动工具 + 多轮推理，确定性链路全失败后的兜底）** + **LLM 运行级熔断
 > 与批量后置抢救（BFS 热路径零 LLM）** + **MCP 标准协议接入（stdio server + client
-> 双向链路）** + **FastAPI 服务化（REST 三接口 + 单槽治理 + Docker）** + 212 项单元测试 + **离线校招证据报告
+> 双向链路）** + **FastAPI 服务化（REST 三接口 + 单槽治理 + Docker）** + **轻量分布式调度
+> （SQLite 任务队列 + 多进程 worker，零新依赖）** + 221 项单元测试 + **离线校招证据报告
 > （`reports/campus_report.md`，6 个真实站点 240 页落盘 + 评估循环量化）**。
 > 传统爬虫确定性为主、LLM 为辅，真实业务问题驱动。
 
@@ -265,6 +266,33 @@ MCP 是**跨进程/跨厂商标准协议**（JSON-RPC over stdio）——前者�
 三壳体关系（面试必问）：CLI / Desktop GUI / REST API 共用 `run_langgraph_crawler`
 单入口，服务层零业务逻辑——同一核心三种载体。
 
+### 3.17 轻量分布式调度（`distributed/task_queue.py` + `distributed/scheduler.py`）
+
+把爬虫从"单进程单站"扩展为"多进程多站"批量调度，**零新依赖**（stdlib sqlite3 +
+multiprocessing）：
+
+- **SQLite 任务队列**：`crawl_tasks` 表（pending/running/done/failed + 优先级 +
+  重试次数 + 租约 + 错误信息）；`claim` 用 `BEGIN IMMEDIATE` 写锁原子抢占——N 个
+  worker 并行消费不会双拿同一任务；
+- **租约 + 心跳 + 崩溃回收**：worker 认领任务后带 `lease_until` 租约，长任务后台
+  线程每 lease/3 续租；worker 进程被杀 → 租约过期 → `requeue_stale()` 自动回收回
+  pending——"至少一次"语义的轻量实现；
+- **失败重试**：`fail()` 未超上限回队重试（attempts 递增），超限终态 failed；
+- **整站级并行**：调度维度是站点（每个 worker 跑一个站点的完整 workflow，run 内仍
+  是 asyncio 并发）——跨进程共享 LangGraph state/BFS 队列在架构上不成立，所以分片
+  维度是站点而非 URL；**URL 去重由共享 agent_memory.db 的 visited_urls 唯一约束
+  跨进程幂等**（零新增代码）；
+- **为什么不上 Redis/Celery**（面试必问）：任务量是几十个站点、瓶颈在站点 IO 不在
+  队列吞吐，SQLite 写锁足够 N worker 的 claim 互斥，内网无 Redis 且零运维成本；
+- **模块命名坑**：队列模块叫 `task_queue` 而非 `queue`——`python distributed/scheduler.py`
+  启动时脚本目录在 sys.path[0]，命名 `queue.py` 会遮蔽标准库 `queue`（LangGraph 依赖
+  `queue.LifoQueue`）运行期直接崩，实测踩中已修复。
+
+**真实验证**（3 站 × 2 worker 实跑）：`enqueue` 入队 3 站 → `run-workers --workers 2`
+并行消费 → 最终 `{'done': 3}`、每任务 `attempts=1`（恰好一次无双执行）：
+xnjzgc.cn **119 页** / zztzmjg.com 86 页 / hnbn666.cn 10 页，全部失败 0。
+zztzmjg 抢救 2 候选被 hash 去重拦截（此前已保存，跨 run 幂等实锤）。
+
 ## 4. 关键工程决策与踩坑
 
 - **规则 12/13（RuiQiCMS 可视化建站）**：纯图产品详情页正文仅 12–16 字，
@@ -284,9 +312,10 @@ MCP 是**跨进程/跨厂商标准协议**（JSON-RPC over stdio）——前者�
 - **T**：一套系统自适应任意网站并自动化全流程。
 - **A**：Supervisor 多智能体 + 计划执行审查闭环 + LLM 关键节点介入 + 规则引擎。
 - **R**：6 个真实站点累计 240 页落盘（xnjzgc.cn 98 页 / zztzmjg.com 84 页）；
-  212 项单元测试全绿；评估循环实锤：4 次运行触发 12 次配置调整，
+  221 项单元测试全绿；评估循环实锤：4 次运行触发 12 次配置调整，
   xnjzgc.cn 保存量 1→98、zztzmjg.com 3→84；hnbn666.cn golden 离线 P/R/F1=1.0；
-  站点学习模式二次爬取 100% 命中；`reports/campus_report.md` 全部指标离线可复现。
+  站点学习模式二次爬取 100% 命中；`reports/campus_report.md` 全部指标离线可复现；
+  3 站 × 2 worker 分布式批量调度实跑全 done、恰好一次无双执行。
 
 ## 6. 快速开始
 
@@ -298,7 +327,7 @@ playwright install chromium          # JS 模板站渲染用
 python -c "import asyncio; from graph.workflow import run_crawler; asyncio.run(run_crawler('https://example.com', max_steps=3000))"
 
 # 单元测试
-python -m pytest tests -q            # 212 passed
+python -m pytest tests -q            # 221 passed
 
 # MCP 协议双向链路演示（stdio：握手→工具发现→call_tool→错误通道）
 python tools/mcp_client.py https://example.com/
@@ -308,6 +337,11 @@ uvicorn api.server:app --host 0.0.0.0 --port 8000
 curl -X POST localhost:8000/crawl -H "Content-Type: application/json" \
      -d '{"url": "https://example.com/", "concurrency": 5}'
 docker build -t crawler-api . && docker run -p 8000:8000 crawler-api
+
+# 轻量分布式调度（SQLite 队列 + 多进程 worker，零新依赖）
+python distributed/scheduler.py enqueue urls.txt
+python distributed/scheduler.py run-workers --workers 2
+python distributed/scheduler.py status
 
 # 离线静态检查（自研 stdlib 版，等价 ruff F401/F403/F811/F821）
 python tools/static_check.py         # 41 文件 / 0 问题
@@ -337,12 +371,15 @@ GUI 入口（校招版双栏工作台）：`python desktop_app.py`（pywebview/W
 │                    #   + vector_retriever(RAG检索) + eval(评估指标/LLM-judge)
 ├── graph/           # 编排级：workflow(Supervisor) / agents(9 Agent) / nodes(节点逻辑) / state(TypedDict)
 │                    #   + react_takeover(深降级 ReAct 接管：行动工具 + 多轮推理)
-├── tests/           # 212 项单元测试（safety / plan / BaseAgent / 工具 / 工具安全
+├── tests/           # 221 项单元测试（safety / plan / BaseAgent / 工具 / 工具安全
 │                    #   / ReAct / 记账 / 去重 / RAG检索 / 评估指标 / FC评估链路
 │                    #   / 图装配冒烟 / golden 指标闭环 / 回归对比 / 深降级接管
-│                    #   / LLM熔断 + 批量抢救 / MCP 工具层 / API 服务层）
+│                    #   / LLM熔断 + 批量抢救 / MCP 工具层 / API 服务层
+│                    #   / 分布式队列 + 多进程消费）
 ├── api/             # FastAPI 服务化（api/server.py：提交/进度/结果三接口 + 单槽治理
 │                    #   + API key + 限流；REST 壳与 CLI/GUI 共用同一爬虫入口）
+├── distributed/     # 轻量分布式调度（task_queue：SQLite 任务队列，租约/心跳/崩溃回收
+│                    #   / 失败重试；scheduler：enqueue + 多进程 run-workers + status）
 ├── tools/           # analyze_trace(轨迹分析) / golden_check(离线评估,支持--json/--offline)
 │                    #   / compare_runs(全指标回归对比) / static_check(自研静态检查) / rag_demo
 │                    #   / mcp_server + mcp_client（MCP stdio 双向链路）
@@ -395,8 +432,12 @@ shared with the in-process FC path). The crawler is also packaged as a REST
 service (FastAPI: submit / progress / results, single active task slot,
 X-API-Key auth, per-client submit throttling, Dockerfile) — the service layer
 holds zero business logic, sharing the same `run_langgraph_crawler` entry as
-the CLI and the desktop GUI (three shells, one core).
-212 unit tests.
+the CLI and the desktop GUI (three shells, one core). A lightweight
+distributed scheduler (stdlib-SQLite task queue with lease / heartbeat /
+crash-recovery, multiprocessing workers, one full workflow per site) batch-ran
+3 real sites with 2 workers to `{'done': 3}` with exactly-once execution
+(`attempts=1` each, zero failures).
+221 unit tests.
 
 **STAR template** (45–60s elevator pitch for English interviews):
 
@@ -406,9 +447,10 @@ the CLI and the desktop GUI (three shells, one core).
 > A: Supervisor multi-agent graph; plan → execute → review loop; LLM reserved
 > for decisions that need judgment; a rule engine for deterministic extraction;
 > memories, observability, and an offline golden-set eval to prove it.
-> R: 6 real sites / 240 pages harvested (98 pages on one); 212 tests green in
+> R: 6 real sites / 240 pages harvested (98 pages on one); 221 tests green in
 > CI; evaluation loops fired 12 config adjustments across 4 runs (saved 1→98
 > on one site); hnbn666.cn golden P/R/F1 = 1.0 offline; a run-level LLM
 > circuit breaker + batched rescue cut one site from overnight stall to an
-> 85-second full crawl; all numbers reproducible offline via
+> 85-second full crawl; a 2-worker distributed scheduler batch-ran 3 sites
+> with exactly-once execution; all numbers reproducible offline via
 > `python tools/gen_campus_report.py`.
