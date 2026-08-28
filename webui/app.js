@@ -46,6 +46,13 @@ function toast(msg, type) {
   setTimeout(function () { el.remove(); }, 2600);
 }
 
+/* ============================ 安全转义 ============================ */
+// 外部文本（日志 / schema / 文件名）插入 innerHTML 前必须转义，防注入
+function escHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 /* ============================ 日志 / 汇总 / 统计 ============================ */
 function appendLog(msg, tag) {
   var box = $('log');
@@ -53,7 +60,7 @@ function appendLog(msg, tag) {
   var t = new Date().toTimeString().slice(0, 8);
   var div = document.createElement('div');
   div.className = tag || 'info';
-  div.innerHTML = '<span class="ts">[' + t + ']</span> ' + msg;
+  div.innerHTML = '<span class="ts">[' + t + ']</span> ' + escHtml(msg);
   box.appendChild(div);
   if (box.children.length > MAX_LOGS) box.removeChild(box.firstChild); // 虚拟滚动
   state.logCount++;
@@ -105,7 +112,7 @@ function fieldHtml(f) {
   var id = 'f_' + f.key;
   var val = (state.lastInputs[state.runner] && state.lastInputs[state.runner][f.key] != null)
     ? state.lastInputs[state.runner][f.key] : (f.default || '');
-  var esc = function (s) { return String(s).replace(/"/g, '&quot;'); };
+  var esc = function (s) { return escHtml(s); };
   var opt = (f.options || []).map(function (o) {
     return '<option' + (o === val ? ' selected' : '') + '>' + esc(o) + '</option>';
   }).join('');
@@ -337,7 +344,11 @@ $('btn_stop').onclick = function () {
   window.pywebview.api.stop();
 };
 
+// 表单控件聚焦时不劫持全局快捷键（如输入框/下拉/按钮内按 Enter 不应触发开始）
+var _FORM_TAGS = { INPUT: 1, SELECT: 1, TEXTAREA: 1, BUTTON: 1 };
 document.addEventListener('keydown', function (e) {
+  var t = e.target;
+  if (t && _FORM_TAGS[t.tagName]) return;
   if (e.key === 'Enter' && !state.running && state.bridgeReady) $('btn_start').click();
   if (e.key === 'Escape') $('btn_stop').click();
 });

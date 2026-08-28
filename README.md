@@ -385,7 +385,8 @@ GUI 入口（校招版双栏工作台）：`python desktop_app.py`（pywebview/W
 │                    #   / mcp_server + mcp_client（MCP stdio 双向链路）
 │                    #   / gen_campus_report(校招证据报告 → reports/)
 ├── reports/         # campus_report.{md,json} 离线量化证据
-├── webui/           # 校招版前端（双主题 / 统计面板 / toast / 拖拽 / 动态表单）
+├── webui/           # 校招版前端（双主题 / 统计面板 / toast / 拖拽 / 动态表单
+│                    #   / XSS 转义 escHtml + read_page 路径白名单 + 快捷键过滤）
 ├── runner_base.py   # TaskRunner 业务协议（换业务零改动的架构支点）
 ├── desktop_app.py   # pywebview 桌面壳（校招版 GUI 入口）
 ├── memory.py        # SQLite 长期记忆（visited_urls / site_patterns）

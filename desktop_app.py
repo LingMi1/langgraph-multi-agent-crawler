@@ -218,11 +218,18 @@ class Api:
         return {"site": d["site"], "pages": pages}
 
     def read_page(self, rel: str):
-        """读取某页 HTML 原文（供前端 iframe srcdoc 预览）。"""
+        """读取某页 HTML 原文（供前端 iframe srcdoc 预览）。
+
+        路径穿越白名单：解析后的绝对路径必须落在输出目录内，`../` 越界一律拒绝
+        （本地桌面工具也按最小权限处理，避免恶意 rel 读到任意文件）。
+        """
         d = self._latest_result_dir()
         if not d:
             return ""
-        full = os.path.join(d["path"], rel.replace("/", os.sep))
+        base = os.path.abspath(d["path"])
+        full = os.path.abspath(os.path.join(base, rel.replace("/", os.sep)))
+        if not full.startswith(base + os.sep):
+            return ""  # 越界读取（如 ../../secret.txt）→ 拒绝
         try:
             with open(full, "r", encoding="utf-8", errors="replace") as fh:
                 return fh.read()
