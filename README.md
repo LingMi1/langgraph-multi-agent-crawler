@@ -10,7 +10,7 @@
 > 全指标回归对比）+ 双层静态检查（自研 stdlib 版 + ruff 交叉验证）** + **深降级 ReAct 自主接管
 > （行动工具 + 多轮推理，确定性链路全失败后的兜底）** + **LLM 运行级熔断
 > 与批量后置抢救（BFS 热路径零 LLM）** + **MCP 标准协议接入（stdio server + client
-> 双向链路）** + 205 项单元测试 + **离线校招证据报告
+> 双向链路）** + **FastAPI 服务化（REST 三接口 + 单槽治理 + Docker）** + 212 项单元测试 + **离线校招证据报告
 > （`reports/campus_report.md`，6 个真实站点 240 页落盘 + 评估循环量化）**。
 > 传统爬虫确定性为主、LLM 为辅，真实业务问题驱动。
 
@@ -242,6 +242,29 @@ hnbn666 触发 ReAct 接管 `decision=retry`），
 与 FC 的边界（面试必问）：`FunctionCallingLoop` 是**进程内 LLM→工具**私有协议，
 MCP 是**跨进程/跨厂商标准协议**（JSON-RPC over stdio）——前者零开销，后者可组合。
 
+### 3.16 FastAPI 服务化（`api/server.py` + `Dockerfile`）
+
+把多 Agent 爬虫包成 REST 服务——提交任务 / 查进度 / 取结果，补服务化与 SLO 叙事：
+
+- **三接口**：`POST /crawl`（202 受理 / 409 单槽忙 / 429 限流）、`GET /tasks/{id}`
+  （状态 + 实时进度 + 日志尾 50 行）、`GET /tasks/{id}/results`（落盘 CSV 行，
+  html 列截断预览防列表页爆炸）；
+- **后台任务隔离**：爬虫同步入口经 `asyncio.to_thread` 卸载到线程池不阻塞事件循环，
+  进度/日志经回调回填、环形缓冲防内存涨；
+- **全局单爬虫槽**：SQLite 记忆与输出目录是全局竞争资源（同站点并行会互相踩），
+  第二个提交直接 409——面试讲清"为什么不做并发多任务"（瓶颈在站点侧不在服务端）；
+- **鉴权 + 提交限流**：`X-API-Key`（`CRAWLER_API_KEY` 未配置时放行本地开发）、
+  每客户端 60s 窗口 6 次提交上限（429 带重试秒数）；
+- **Dockerfile**：`python:3.12-slim` + 依赖层缓存；Playwright/系统 Chrome 不进镜像
+  （体积与内网约束），JS 渲染站走 httpx 降级路径。
+
+**真实验证**（uvicorn 实跑 zztzmjg.com）：`POST /crawl` 202 → 槽忙时第二提交 409 →
+轮询进度 `fetched=25/queue=109` → `done saved=86` → `/results` 返回 3 行
+（title/url/html 截断预览）——与 CLI 同站点实测 86 页一致。
+
+三壳体关系（面试必问）：CLI / Desktop GUI / REST API 共用 `run_langgraph_crawler`
+单入口，服务层零业务逻辑——同一核心三种载体。
+
 ## 4. 关键工程决策与踩坑
 
 - **规则 12/13（RuiQiCMS 可视化建站）**：纯图产品详情页正文仅 12–16 字，
@@ -261,7 +284,7 @@ MCP 是**跨进程/跨厂商标准协议**（JSON-RPC over stdio）——前者�
 - **T**：一套系统自适应任意网站并自动化全流程。
 - **A**：Supervisor 多智能体 + 计划执行审查闭环 + LLM 关键节点介入 + 规则引擎。
 - **R**：6 个真实站点累计 240 页落盘（xnjzgc.cn 98 页 / zztzmjg.com 84 页）；
-  205 项单元测试全绿；评估循环实锤：4 次运行触发 12 次配置调整，
+  212 项单元测试全绿；评估循环实锤：4 次运行触发 12 次配置调整，
   xnjzgc.cn 保存量 1→98、zztzmjg.com 3→84；hnbn666.cn golden 离线 P/R/F1=1.0；
   站点学习模式二次爬取 100% 命中；`reports/campus_report.md` 全部指标离线可复现。
 
@@ -275,10 +298,16 @@ playwright install chromium          # JS 模板站渲染用
 python -c "import asyncio; from graph.workflow import run_crawler; asyncio.run(run_crawler('https://example.com', max_steps=3000))"
 
 # 单元测试
-python -m pytest tests -q            # 205 passed
+python -m pytest tests -q            # 212 passed
 
 # MCP 协议双向链路演示（stdio：握手→工具发现→call_tool→错误通道）
 python tools/mcp_client.py https://example.com/
+
+# REST 服务化（提交/进度/结果三接口 + 限流/API key）
+uvicorn api.server:app --host 0.0.0.0 --port 8000
+curl -X POST localhost:8000/crawl -H "Content-Type: application/json" \
+     -d '{"url": "https://example.com/", "concurrency": 5}'
+docker build -t crawler-api . && docker run -p 8000:8000 crawler-api
 
 # 离线静态检查（自研 stdlib 版，等价 ruff F401/F403/F811/F821）
 python tools/static_check.py         # 41 文件 / 0 问题
@@ -308,10 +337,12 @@ GUI 入口（校招版双栏工作台）：`python desktop_app.py`（pywebview/W
 │                    #   + vector_retriever(RAG检索) + eval(评估指标/LLM-judge)
 ├── graph/           # 编排级：workflow(Supervisor) / agents(9 Agent) / nodes(节点逻辑) / state(TypedDict)
 │                    #   + react_takeover(深降级 ReAct 接管：行动工具 + 多轮推理)
-├── tests/           # 205 项单元测试（safety / plan / BaseAgent / 工具 / 工具安全
+├── tests/           # 212 项单元测试（safety / plan / BaseAgent / 工具 / 工具安全
 │                    #   / ReAct / 记账 / 去重 / RAG检索 / 评估指标 / FC评估链路
 │                    #   / 图装配冒烟 / golden 指标闭环 / 回归对比 / 深降级接管
-│                    #   / LLM熔断 + 批量抢救 / MCP 工具层）
+│                    #   / LLM熔断 + 批量抢救 / MCP 工具层 / API 服务层）
+├── api/             # FastAPI 服务化（api/server.py：提交/进度/结果三接口 + 单槽治理
+│                    #   + API key + 限流；REST 壳与 CLI/GUI 共用同一爬虫入口）
 ├── tools/           # analyze_trace(轨迹分析) / golden_check(离线评估,支持--json/--offline)
 │                    #   / compare_runs(全指标回归对比) / static_check(自研静态检查) / rag_demo
 │                    #   / mcp_server + mcp_client（MCP stdio 双向链路）
@@ -360,8 +391,12 @@ path, one selector-locate per URL-template group, degraded save when the LLM
 is unavailable) took a real site from "stalled overnight at 86 pages" to
 "full crawl in 85 s with 3 LLM calls". Action/analysis tools are also exposed
 over MCP (stdio server + client, protocol 2025-11-25, single-source executors
-shared with the in-process FC path).
-205 unit tests.
+shared with the in-process FC path). The crawler is also packaged as a REST
+service (FastAPI: submit / progress / results, single active task slot,
+X-API-Key auth, per-client submit throttling, Dockerfile) — the service layer
+holds zero business logic, sharing the same `run_langgraph_crawler` entry as
+the CLI and the desktop GUI (three shells, one core).
+212 unit tests.
 
 **STAR template** (45–60s elevator pitch for English interviews):
 
@@ -371,7 +406,7 @@ shared with the in-process FC path).
 > A: Supervisor multi-agent graph; plan → execute → review loop; LLM reserved
 > for decisions that need judgment; a rule engine for deterministic extraction;
 > memories, observability, and an offline golden-set eval to prove it.
-> R: 6 real sites / 240 pages harvested (98 pages on one); 205 tests green in
+> R: 6 real sites / 240 pages harvested (98 pages on one); 212 tests green in
 > CI; evaluation loops fired 12 config adjustments across 4 runs (saved 1→98
 > on one site); hnbn666.cn golden P/R/F1 = 1.0 offline; a run-level LLM
 > circuit breaker + batched rescue cut one site from overnight stall to an
