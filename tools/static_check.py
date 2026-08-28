@@ -6,6 +6,11 @@ CI / 本地统一入口，覆盖 pyflakes(F) 的核心几类：
   F811  重复定义（同一作用域内名被再次定义）
   F821  引用了未定义的名称（简单作用域分析）
 
+另含**类型注解完备性门禁**（ANNO，mypy disallow_untyped_defs 的轻量子集）：
+对核心模块（_ANNO_STRICT_PREFIXES）内的所有函数/方法强制"参数 + 返回"全注解
+（self/cls 与 __init__ 豁免）。不装 mypy 也能在 CI 里防"新函数裸奔"，等代码库
+全注解后再上 mypy 严格模式是平滑路径。
+
 不依赖第三方包（ruff 需编译安装；本脚本用 stdlib 即可在无网络环境跑），
 与 ruff 的 select=["F"] 互为补充：ruff 负责更全的规则集，本脚本负责
 可离线验证的确定性检查。返回违规数，非 0 即退出码 1（CI 可挂钩）。
@@ -24,6 +29,19 @@ from typing import List, Optional, Tuple
 # 允许的模块级通配导入（测试代码常显式 `from xx import *`）
 _STAR_IMPORT_ALLOW = {"pytest"}  # 无默认限制，可按需收紧
 
+# 类型注解完备性门禁的作用域（渐进式：核心模块先强制，扩覆盖只需加前缀）
+_ANNO_STRICT_PREFIXES = (
+    "distributed/",
+    "api/",
+    "agents/budget.py",
+    "agents/safety.py",
+    "agents/interfaces.py",
+    "agents/tools.py",
+    "agents/react.py",
+    "tools/golden_check.py",
+    "tools/prompt_registry.py",
+)
+
 _BUILTINS = set(dir(builtins))
 
 # 模块级魔法名（__file__ / __name__ 等）不算未定义
@@ -41,10 +59,11 @@ class _Scope:
 
 
 class _Checker(ast.NodeVisitor):
-    def __init__(self):
+    def __init__(self, strict_anno: bool = False):
         self.errors: List[str] = []
         self._scopes: List[_Scope] = []
         self._scope = self._push_scope()
+        self._strict_anno = strict_anno
         # 跨作用域聚合"出现过"的名字：模块级 import 被函数体使用也计入使用
         self._used_anywhere: set = set()
 
@@ -104,6 +123,7 @@ class _Checker(ast.NodeVisitor):
         self._scope.defined.add(name)
 
     def visit_FunctionDef(self, node: ast.FunctionDef):
+        self._check_anno(node)
         self._bind(node.name)
         inner = self._push_scope(self._scope)
         self._scope, inner = inner, self._scope
@@ -112,6 +132,9 @@ class _Checker(ast.NodeVisitor):
                 self._bind(arg.arg)
                 if arg.annotation:
                     self.visit(arg.annotation)
+            for default in node.args.defaults + node.args.kw_defaults:
+                if default is not None:
+                    self.visit(default)
             if node.args.vararg:
                 self._bind(node.args.vararg.arg)
                 if node.args.vararg.annotation:
@@ -130,6 +153,22 @@ class _Checker(ast.NodeVisitor):
             self._scope = inner
 
     visit_AsyncFunctionDef = visit_FunctionDef
+
+    # ── 类型注解完备性（ANNO，mypy disallow_untyped_defs 的轻量子集） ──
+    def _check_anno(self, node: ast.AST) -> None:
+        if not self._strict_anno or isinstance(node, ast.Lambda):
+            return
+        if node.name != "__init__" and node.returns is None:
+            self._err(node, "ANNO", f"缺返回注解: {node.name}")
+        for arg in node.args.posonlyargs + node.args.args + node.args.kwonlyargs:
+            if arg.arg in ("self", "cls"):
+                continue
+            if arg.annotation is None:
+                self._err(arg, "ANNO", f"缺参数注解 {arg.arg!r} in {node.name}")
+        if node.args.vararg is not None and node.args.vararg.annotation is None:
+            self._err(node.args.vararg, "ANNO", f"缺参数注解 *{node.args.vararg.arg} in {node.name}")
+        if node.args.kwarg is not None and node.args.kwarg.annotation is None:
+            self._err(node.args.kwarg, "ANNO", f"缺参数注解 **{node.args.kwarg.arg} in {node.name}")
 
     def visit_ClassDef(self, node: ast.ClassDef):
         self._bind(node.name)
@@ -191,6 +230,9 @@ class _Checker(ast.NodeVisitor):
         try:
             for arg in node.args.posonlyargs + node.args.args + node.args.kwonlyargs:
                 self._bind(arg.arg)
+            for default in node.args.defaults + node.args.kw_defaults:
+                if default is not None:
+                    self.visit(default)
             if node.args.vararg:
                 self._bind(node.args.vararg.arg)
             if node.args.kwarg:
@@ -258,14 +300,17 @@ class _Checker(ast.NodeVisitor):
                 self._prebind_targets(e)
 
 
-def check_file(path: str) -> List[str]:
+def check_file(path: str, strict_anno: Optional[bool] = None) -> List[str]:
     try:
         with open(path, encoding="utf-8") as f:
             src = f.read()
     except OSError as e:
         return [f"{path}: cannot read: {e}"]
     tree = ast.parse(src)
-    return [f"{path}:{e}" for e in _Checker().run(tree)]
+    if strict_anno is None:
+        norm = path.replace("\\", "/")
+        strict_anno = any(norm.startswith(p) for p in _ANNO_STRICT_PREFIXES)
+    return [f"{path}:{e}" for e in _Checker(strict_anno=strict_anno).run(tree)]
 
 
 def _collect_targets(paths: List[str]) -> List[str]:
@@ -284,7 +329,7 @@ def _collect_targets(paths: List[str]) -> List[str]:
 
 
 def main() -> int:
-    args = sys.argv[1:] or ["agents", "graph", "tools", "tests"]
+    args = sys.argv[1:] or ["agents", "graph", "tools", "tests", "api", "distributed"]
     files = _collect_targets(args)
     errors: List[str] = []
     for f in files:

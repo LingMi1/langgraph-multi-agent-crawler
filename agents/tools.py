@@ -156,19 +156,19 @@ class ToolRegistry:
         """注册内置工具集（包装项目真实确定性能力）。"""
         reg = ToolRegistry()
 
-        def _exec_url_key(url: str):
+        def _exec_url_key(url: str) -> str:
             from graph.nodes import _url_key
             return _url_key(url)
 
-        def _exec_md5(text: str):
+        def _exec_md5(text: str) -> str:
             from agents.extractor import _compute_md5
             return _compute_md5(text or "")
 
-        def _exec_pagination(url: str):
+        def _exec_pagination(url: str) -> bool:
             from graph.nodes import _is_pagination_url
             return _is_pagination_url(url)
 
-        def _exec_pure_img_detail(html: str):
+        def _exec_pure_img_detail(html: str) -> bool:
             from graph.nodes import _is_pure_image_product_detail
             return _is_pure_image_product_detail(html or "")
 

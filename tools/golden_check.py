@@ -80,7 +80,7 @@ GOLDEN_SITES = [
 ]
 
 
-def _scan_backup(site: dict):
+def _scan_backup(site: dict) -> tuple:
     """扫描该站点已落盘的 HTML：返回 (saved, keyword_hit, discovered_sections)。
 
     在线 / 离线两条路径共用同一份"落盘断言"，保证判定口径一致。

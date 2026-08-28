@@ -26,7 +26,7 @@ import time
 import uuid
 from collections import deque
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
@@ -128,12 +128,12 @@ def _find_csv(url: str) -> Optional[Path]:
     return None
 
 
-@app.post("/crawl", status_code=202)
+@app.post("/crawl", status_code=202, response_model=None)
 async def submit_crawl(
     req: CrawlRequest,
     x_api_key: Optional[str] = Header(None),
     x_forwarded_for: Optional[str] = Header(None),
-):
+) -> Union[Dict[str, Any], JSONResponse]:
     _check_api_key(x_api_key)
     _check_submit_rate(_client_key(x_api_key, x_forwarded_for))
     busy = _running_task()
@@ -156,8 +156,8 @@ async def submit_crawl(
     return {"task_id": task_id, "status": "running", "poll": f"/tasks/{task_id}"}
 
 
-@app.get("/tasks/{task_id}")
-async def task_status(task_id: str, x_api_key: Optional[str] = Header(None)):
+@app.get("/tasks/{task_id}", response_model=None)
+async def task_status(task_id: str, x_api_key: Optional[str] = Header(None)) -> Union[Dict[str, Any], JSONResponse]:
     _check_api_key(x_api_key)
     task = _TASKS.get(task_id)
     if not task:
@@ -171,8 +171,8 @@ async def task_status(task_id: str, x_api_key: Optional[str] = Header(None)):
     }
 
 
-@app.get("/tasks/{task_id}/results")
-async def task_results(task_id: str, limit: int = 200, x_api_key: Optional[str] = Header(None)):
+@app.get("/tasks/{task_id}/results", response_model=None)
+async def task_results(task_id: str, limit: int = 200, x_api_key: Optional[str] = Header(None)) -> Union[Dict[str, Any], JSONResponse]:
     _check_api_key(x_api_key)
     task = _TASKS.get(task_id)
     if not task:

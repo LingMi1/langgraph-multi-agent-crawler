@@ -1,0 +1,22 @@
+# 项目级工具配置（pytest 保持零配置，仅补类型检查与覆盖率的可选配置）
+#
+# 类型安全策略（面试叙事）：
+#   - 强制项：tools/static_check.py 的 ANNO 门禁（stdlib AST 实现，CI 已挂钩），
+#     对核心模块要求"参数 + 返回"全注解 —— 无网络环境也能跑的类型完备性护栏；
+#   - 渐进项：本文件 [tool.mypy] 提供 mypy 配置（CI 以 advisory 方式运行），
+#     代码库全注解后把 advisory 改为强制即可平滑过渡到 mypy 严格模式。
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = false
+
+# mypy 作用域与 ANNO 门禁保持一致（核心模块先类型化）：
+#   mypy distributed api agents/budget.py agents/safety.py agents/interfaces.py agents/tools.py agents/react.py tools/golden_check.py
+
+[tool.coverage.report]
+# 覆盖率门槛：核心包 >= 60%（起步低值，随测试补充渐进加码）
+fail_under = 60
+show_missing = true
+skip_covered = false

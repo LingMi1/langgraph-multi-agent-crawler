@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agents.eval import (
     compute_prf,
     heuristic_score,
+    judge_agreement,
     llm_judge,
     ndcg_at_k,
     parse_judge_json,
@@ -158,3 +159,31 @@ class TestLlmJudge:
 
         r = llm_judge(boom, "s", "c")
         assert r["parsed"] is False and r["score"] == 0
+
+
+class TestJudgeAgreement:
+    """judge 与人工标注的一致性：准确率 + Cohen's kappa（校准 LLM-as-judge 的 ground truth）。"""
+
+    def test_perfect_agreement(self):
+        r = judge_agreement([1, 2, 3, 4], [1, 2, 3, 4])
+        assert r["n"] == 4 and r["accuracy"] == 1.0 and r["kappa"] == 1.0
+
+    def test_complete_disagreement(self):
+        # 双方各自完全一致但互不重叠 → po=0, pe=0 → kappa=0（Cohen's kappa 特性）
+        r = judge_agreement([0, 0, 0, 0], [5, 5, 5, 5])
+        assert r["accuracy"] == 0.0 and r["kappa"] == 0.0
+
+    def test_tolerance_counts_near_miss_as_agree(self):
+        labels = [3, 3, 3, 3]
+        scores = [2, 3, 4, 3]
+        assert judge_agreement(labels, scores, tolerance=1)["accuracy"] == 1.0
+        assert judge_agreement(labels, scores, tolerance=0)["accuracy"] == 0.5
+
+    def test_no_variance_kappa_undefined(self):
+        # 无分歧（pe==1）→ kappa 不可定义返回 None，准确率仍 1.0
+        r = judge_agreement([2, 2], [2, 2])
+        assert r["accuracy"] == 1.0 and r["kappa"] is None
+
+    def test_empty_or_mismatched(self):
+        assert judge_agreement([], [])["accuracy"] is None
+        assert judge_agreement([1, 2], [1])["n"] == 2 and judge_agreement([1, 2], [1])["kappa"] is None

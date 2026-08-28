@@ -17,7 +17,6 @@
 """
 import argparse
 import multiprocessing
-import os
 import sys
 import threading
 import time

@@ -177,3 +177,40 @@ def llm_judge(
                 "parsed": True,
             }
     return {"score": 0, "reason": "judge 输出无法解析", "parsed": False}
+
+
+def judge_agreement(
+    human_labels: Sequence[int],
+    judge_scores: Sequence[int],
+    tolerance: int = 0,
+) -> Dict[str, Optional[float]]:
+    """LLM-as-judge 与人工标注的一致性度量：准确率 + Cohen's kappa。
+
+    面试叙事：LLM-as-judge 本身也是模型，凭什么当 ground truth？用"judge vs
+    人工标注"的一致性来校准它——kappa ≥ 0.6 视为中等以上一致（Landis-Koch
+    经验线），低于阈值说明 judge 评分标准漂移，要重写 criteria 或换 judge。
+
+    - accuracy：容差内一致样本占比（tolerance=1 即"±1 分算一致"）
+    - kappa：Cohen's kappa（精确一致口径）；无分歧（pe==1）时不可定义返回 None
+    """
+    n = len(human_labels)
+    if n == 0 or len(judge_scores) != n:
+        return {"n": n, "accuracy": None, "kappa": None}
+    rows = [0.0] * 6   # 人工标注在 0..5 的分布
+    cols = [0.0] * 6   # judge 分数在 0..5 的分布
+    agree = 0
+    for h, j in zip(human_labels, judge_scores):
+        h = max(0, min(5, int(h)))
+        j = max(0, min(5, int(j)))
+        rows[h] += 1
+        cols[j] += 1
+        if abs(h - j) <= tolerance:
+            agree += 1
+    po = agree / n
+    pe = sum(rows[c] * cols[c] for c in range(6)) / (n * n)
+    kappa = (po - pe) / (1 - pe) if pe != 1.0 else None
+    return {
+        "n": n,
+        "accuracy": round(po, 4),
+        "kappa": round(kappa, 4) if kappa is not None else None,
+    }

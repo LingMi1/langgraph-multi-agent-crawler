@@ -53,28 +53,84 @@ def get_prompt(name: str) -> str:
 
 
 # ============================================================================
-# LLM 客户端（OpenAI 兼容 / DeepSeek），JSON 严格输出 + 重试
+# LLM 客户端（OpenAI 兼容 / DeepSeek），JSON 严格输出 + 重试 + 多 provider 故障转移
 # ============================================================================
 
 _llm_client = None
+_llm_provider_idx = 0  # 当前 provider 下标（0 = 主 DEEPSEEK_*，1+ = 备用）
+
+
+def _providers() -> List[Dict]:
+    """主 provider + 备用 providers。备用 base_urls 以 | 分隔，key/model 可选覆盖。"""
+    primary = {
+        "base_url": config.DEEPSEEK_BASE_URL,
+        "api_key": config.DEEPSEEK_API_KEY,
+        "model": config.DEEPSEEK_MODEL,
+    }
+    backup_urls = [
+        u.strip()
+        for u in (getattr(config, "LLM_BACKUP_BASE_URLS", "") or "").split("|")
+        if u.strip()
+    ]
+    backup_keys = [
+        k.strip()
+        for k in (getattr(config, "LLM_BACKUP_API_KEYS", "") or "").split("|")
+        if k.strip()
+    ]
+    backup_models = [
+        m.strip()
+        for m in (getattr(config, "LLM_BACKUP_MODELS", "") or "").split("|")
+        if m.strip()
+    ]
+    providers = [primary]
+    for i, url in enumerate(backup_urls):
+        providers.append(
+            {
+                "base_url": url,
+                "api_key": backup_keys[i] if i < len(backup_keys) else primary["api_key"],
+                "model": backup_models[i] if i < len(backup_models) else primary["model"],
+            }
+        )
+    return providers
+
+
+def _provider_count() -> int:
+    return len(_providers())
+
+
+def _current_model() -> str:
+    """当前 provider 的模型名（全小写，DeepSeek 系 API 要求）"""
+    return (_providers()[_llm_provider_idx]["model"] or "deepseek-chat").lower()
 
 
 def _get_llm():
-    """懒加载 OpenAI 客户端（DeepSeek 兼容接口）"""
+    """懒加载当前 provider 的 OpenAI 客户端（DeepSeek 兼容接口）"""
     global _llm_client
     if _llm_client is None:
+        p = _providers()[_llm_provider_idx]
         from openai import AsyncOpenAI
         _llm_client = AsyncOpenAI(
-            api_key=config.DEEPSEEK_API_KEY,
-            base_url=config.DEEPSEEK_BASE_URL,
+            api_key=p["api_key"],
+            base_url=p["base_url"],
             timeout=600,  # v4-flash 推理大 DOM（40000 字符）可能超 120s
         )
     return _llm_client
 
 
-def reset_llm():
-    global _llm_client
+def _switch_provider() -> bool:
+    """切换到下一个备用 provider（重建客户端）；没有更多 provider 返回 False"""
+    global _llm_client, _llm_provider_idx
+    if _llm_provider_idx + 1 >= _provider_count():
+        return False
+    _llm_provider_idx += 1
     _llm_client = None
+    return True
+
+
+def reset_llm():
+    global _llm_client, _llm_provider_idx
+    _llm_client = None
+    _llm_provider_idx = 0
 
 
 async def chat_json(
@@ -85,48 +141,119 @@ async def chat_json(
     retries: int = 2,
 ) -> Optional[Dict]:
     """
-    调用 LLM 并要求返回 JSON。返回解析后的 dict；重试失败返回 None。
+    调用 LLM 并要求返回 JSON。返回解析后的 dict；全部重试失败返回 None。
     从响应中容错提取 JSON（去 ```json 围栏、取首个 { ... } 平衡块）。
+
+    ★ 多 provider 故障转移：当前 provider 重试耗尽自动切换到备用
+      （LLM_BACKUP_BASE_URLS，| 分隔），全部 provider 失败才记 1 次连续失败。
 
     ★ 运行级熔断（agents/breaker.py）：熔断打开时直接返回 None（零等待），
       调用方按"无 LLM"降级——llm_locate 回退代码启发式、导航分类回退规则。
-      一次调用成功 → 计数清零；重试全部耗尽 → 记 1 次连续失败。
+      一次调用成功 → 计数清零；全部 provider 重试耗尽 → 记 1 次连续失败。
     """
     from agents.breaker import llm_breaker
 
-    client = _get_llm()
-    if client is None:
-        agent_logger.error("[LLM] 客户端未初始化（检查 DEEPSEEK_API_KEY）")
-        return None
     if not llm_breaker.check():
         return None
+    if _get_llm() is None:
+        agent_logger.error("[LLM] 客户端未初始化（检查 DEEPSEEK_API_KEY）")
+        return None
     last_err = ""
-    for attempt in range(retries + 1):
+    provider_attempts = 0
+    total_providers = _provider_count()
+    while provider_attempts < total_providers:
+        client = _get_llm()
+        for attempt in range(retries + 1):
+            try:
+                resp = await client.chat.completions.create(
+                    model=_current_model(),
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content},
+                    ],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                text = resp.choices[0].message.content or ""
+                if not text:
+                    agent_logger.warning(f"[LLM] 返回空 content（finish={resp.choices[0].finish_reason}），可能是 reasoning 模型 token 耗尽")
+                parsed = _parse_json(text)
+                if parsed is not None:
+                    llm_breaker.record_success()
+                    return parsed
+                last_err = "JSON 解析失败"
+            except Exception as e:
+                last_err = f"{type(e).__name__}: {e}"
+            agent_logger.warning(f"[LLM] 调用失败(重试{attempt + 1}/{retries + 1}): {last_err}")
+            if attempt < retries:
+                await asyncio.sleep(2.0 * (attempt + 1))
+        # 当前 provider 重试耗尽 → 切换备用 provider
+        if not _switch_provider():
+            break
+        provider_attempts += 1
+        agent_logger.warning(f"[LLM] 当前 provider 不可用，切换备用（{provider_attempts + 1}/{total_providers}）")
+    llm_breaker.record_failure(last_err)
+    return None
+
+
+async def chat_stream(
+    system_prompt: str,
+    user_content: str,
+    temperature: float = 0.0,
+    max_tokens: int = 32768,
+):
+    """
+    流式调用 LLM，逐块产出文本片段（async generator）。
+
+    与 chat_json 共用基础设施：熔断检查 + 多 provider 故障转移
+    （create 阶段失败才切换；流中途异常直接终止，不重复浪费）。
+    调用方按"已收到的片段"拼装即可；失败/熔断时产出为空。
+    """
+    from agents.breaker import llm_breaker
+
+    if not llm_breaker.check():
+        return
+    if _get_llm() is None:
+        agent_logger.error("[LLM] 客户端未初始化（检查 DEEPSEEK_API_KEY）")
+        return
+    last_err = ""
+    provider_attempts = 0
+    total_providers = _provider_count()
+    while provider_attempts < total_providers:
+        client = _get_llm()
         try:
-            resp = await client.chat.completions.create(
-                model=config.get_model_name(),
+            stream = await client.chat.completions.create(
+                model=_current_model(),
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_content},
                 ],
                 temperature=temperature,
                 max_tokens=max_tokens,
+                stream=True,
             )
-            text = resp.choices[0].message.content or ""
-            if not text:
-                agent_logger.warning(f"[LLM] 返回空 content（finish={resp.choices[0].finish_reason}），可能是 reasoning 模型 token 耗尽")
-            parsed = _parse_json(text)
-            if parsed is not None:
-                llm_breaker.record_success()
-                return parsed
-            last_err = "JSON 解析失败"
         except Exception as e:
             last_err = f"{type(e).__name__}: {e}"
-        agent_logger.warning(f"[LLM] 调用失败(重试{attempt + 1}/{retries + 1}): {last_err}")
-        if attempt < retries:
-            await asyncio.sleep(2.0 * (attempt + 1))
+            agent_logger.warning(f"[LLM] 流式调用失败: {last_err}")
+            if not _switch_provider():
+                break
+            provider_attempts += 1
+            continue
+        # 流建立成功：逐块产出；中途异常直接终止（不切换 provider）
+        try:
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                piece = getattr(chunk.choices[0].delta, "content", None) or ""
+                if piece:
+                    yield piece
+        except Exception as e:
+            agent_logger.warning(f"[LLM] 流中途异常，提前终止: {type(e).__name__}: {e}")
+            llm_breaker.record_failure(f"stream abort: {type(e).__name__}")
+            return
+        llm_breaker.record_success()
+        return
     llm_breaker.record_failure(last_err)
-    return None
 
 
 def _parse_json(text: str) -> Optional[Dict]:

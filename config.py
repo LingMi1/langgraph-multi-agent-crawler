@@ -18,6 +18,14 @@ DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 # 置 true 时请求显式禁用 thinking，保证 FunctionCallingLoop/FC 裁决正常续传。
 DEEPSEEK_DISABLE_THINKING = os.getenv("DEEPSEEK_DISABLE_THINKING", "false").lower() in ("true", "1", "yes")
 
+# ==================== LLM 多 provider 故障转移 ====================
+# 主 provider 见上方 DEEPSEEK_*；备用 provider 的 base_url 以 | 分隔。
+# 备用 key / model 可选：缺省复用主配置；若提供则与 base_url 按下标一一对应。
+# 主 provider 重试耗尽后自动切换备用，全部失败才记熔断失败。
+LLM_BACKUP_BASE_URLS = os.getenv("LLM_BACKUP_BASE_URLS", "")
+LLM_BACKUP_API_KEYS = os.getenv("LLM_BACKUP_API_KEYS", "")
+LLM_BACKUP_MODELS = os.getenv("LLM_BACKUP_MODELS", "")
+
 
 def get_model_name() -> str:
     """返回规范化后的模型名（DeepSeek API 要求全小写，如 deepseek-v4-pro）"""
