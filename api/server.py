@@ -11,6 +11,7 @@ FastAPI 服务化 — 把多 Agent 爬虫包成 REST 服务（提交任务 / 查
   POST /crawl                 提交爬取任务 → 202 {task_id}（槽忙 → 409）
   GET  /tasks/{task_id}       状态/进度/日志尾部 → running|done|failed
   GET  /tasks/{task_id}/results  落盘 CSV 行（任务完成前 → 409）
+  POST /chat/stream           SSE 流式调用 LLM（多 provider 故障转移 + 熔断）
 
 鉴权：请求头 X-API-Key；环境变量 CRAWLER_API_KEY 未设置时放行（本地开发友好）。
 限流：单爬虫槽 + 每客户端 60s 滑动窗口内最多 6 次提交（429）。
@@ -26,10 +27,10 @@ import time
 import uuid
 from collections import deque
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
 from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -53,6 +54,14 @@ class CrawlRequest(BaseModel):
     url: str = Field(..., description="目标网站首页 URL")
     concurrency: int = Field(5, ge=1, le=20)
     reset_memory: bool = Field(False, description="清空该站点记忆与旧输出后重爬")
+
+
+class ChatStreamRequest(BaseModel):
+    """/chat/stream SSE 请求体。"""
+    system: str = Field("", description="system prompt")
+    prompt: str = Field(..., description="user prompt")
+    temperature: float = Field(0.0, ge=0.0, le=2.0)
+    max_tokens: int = Field(32768, ge=1, le=131072)
 
 
 def _client_key(x_api_key: Optional[str], x_forwarded: Optional[str]) -> str:
@@ -194,6 +203,30 @@ async def task_results(task_id: str, limit: int = 200, x_api_key: Optional[str] 
             rows.append(row)
     return {"task_id": task_id, "csv_path": str(csv_path),
             "returned": len(rows), "rows": rows}
+
+
+@app.post("/chat/stream", response_model=None)
+async def chat_stream_endpoint(
+    req: ChatStreamRequest,
+    x_api_key: Optional[str] = Header(None),
+) -> StreamingResponse:
+    """SSE 流式调用 LLM（text/event-stream）。
+
+    故障转移/熔断/多 provider 全在 agents.llm_pipeline.chat_stream 内部完成，
+    这里只负责把产出片段包成 SSE 帧；prompt 为空或失败时只发 [DONE]。
+    """
+    _check_api_key(x_api_key)
+    from agents.llm_pipeline import chat_stream
+
+    async def _sse() -> AsyncIterator[str]:
+        async for piece in chat_stream(
+            req.system, req.prompt,
+            temperature=req.temperature, max_tokens=req.max_tokens,
+        ):
+            yield f"data: {piece}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(_sse(), media_type="text/event-stream")
 
 
 if __name__ == "__main__":

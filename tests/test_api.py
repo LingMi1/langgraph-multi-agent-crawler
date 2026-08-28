@@ -164,3 +164,79 @@ def test_failed_task_reports_error(client, monkeypatch):
     final = _wait_done(client, tid)
     assert final["status"] == "failed"
     assert "RuntimeError" in final["error"]
+
+
+# ============================================================================
+# /chat/stream SSE 流式端点（chat_stream 基础设施已由 failover 测试覆盖）
+# ============================================================================
+
+def _install_stream_fake(monkeypatch, chunks):
+    """把 llm_pipeline._get_llm 换成产出 chunks 的流式假客户端。"""
+    from agents import llm_pipeline
+
+    class _Delta:
+        def __init__(self, content):
+            self.content = content
+
+    class _Choice:
+        def __init__(self, content):
+            self.delta = _Delta(content)
+
+    class _Chunk:
+        def __init__(self, content):
+            self.choices = [_Choice(content)]
+
+    class _FakeStream:
+        def __init__(self, items):
+            self._items = items
+
+        def __aiter__(self):
+            return self._gen()
+
+        async def _gen(self):
+            for c in self._items:
+                yield c
+
+    class _Completions:
+        async def create(self, **kw):
+            return _FakeStream([_Chunk(c) for c in chunks])
+
+    class _FakeClient:
+        chat = type("_Chat", (), {"completions": _Completions()})()
+
+    monkeypatch.setattr(llm_pipeline, "_get_llm", lambda: _FakeClient())
+
+
+def test_chat_stream_sse(client, monkeypatch):
+    from agents.breaker import llm_breaker
+
+    llm_breaker.reset()
+    _install_stream_fake(monkeypatch, ["你好", "世界"])
+    r = client.post("/chat/stream", json={"prompt": "hi"})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/event-stream")
+    assert "data: 你好" in r.text
+    assert "data: 世界" in r.text
+    assert r.text.endswith("data: [DONE]\n\n")
+    llm_breaker.reset()
+
+
+def test_chat_stream_sse_breaker_open_only_done(client, monkeypatch):
+    from agents import llm_pipeline
+    from agents.breaker import llm_breaker
+
+    llm_breaker.record_failure("f1")
+    llm_breaker.record_failure("f2")
+    llm_breaker.record_failure("f3")  # 开闸 → chat_stream 零请求直接空产出
+
+    class _Never:
+        def __init__(self):
+            self.calls = 0
+
+    never = _Never()
+    monkeypatch.setattr(llm_pipeline, "_get_llm", lambda: never)
+    r = client.post("/chat/stream", json={"prompt": "hi"})
+    assert r.status_code == 200
+    assert r.text == "data: [DONE]\n\n"
+    assert never.calls == 0
+    llm_breaker.reset()

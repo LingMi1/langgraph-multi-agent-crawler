@@ -11,7 +11,7 @@
 > （行动工具 + 多轮推理，确定性链路全失败后的兜底）** + **LLM 运行级熔断
 > 与批量后置抢救（BFS 热路径零 LLM）** + **MCP 标准协议接入（stdio server + client
 > 双向链路）** + **FastAPI 服务化（REST 三接口 + 单槽治理 + Docker）** + **轻量分布式调度
-> （SQLite 任务队列 + 多进程 worker，零新依赖）** + 258 项单元测试 + **离线校招证据报告
+> （SQLite 任务队列 + 多进程 worker，零新依赖）** + 260 项单元测试 + **离线校招证据报告
 > （`reports/campus_report.md`，6 个真实站点 240 页落盘 + 评估循环量化）**。
 > 传统爬虫确定性为主、LLM 为辅，真实业务问题驱动。
 
@@ -56,7 +56,7 @@
 - **解析清洗**：BeautifulSoup4 · trafilatura · 自研规则引擎（4 级封顶 + 连续去重）
 - **数据模型**：Pydantic v2（严格输出 schema 校验）
 - **持久化**：SQLite（URL 去重 / HTML 缓存 / 站点学习模式）+ 本地文件 + CSV
-- **质量保障**：pytest（161 tests）+ JSONL 全轨迹 + Golden Set 离线评估（P/R/F1 + 栏目发现率）+ LLM-as-judge + GitHub Actions CI（pytest + 双层静态检查）
+- **质量保障**：pytest（260 tests）+ JSONL 全轨迹 + Golden Set 离线评估（P/R/F1 + 栏目发现率）+ LLM-as-judge + GitHub Actions CI（pytest + 双层静态检查）
 
 ## 3. 核心设计
 
@@ -328,7 +328,7 @@ zztzmjg 抢救 2 候选被 hash 去重拦截（此前已保存，跨 run 幂等�
 - **T**：一套系统自适应任意网站并自动化全流程。
 - **A**：Supervisor 多智能体 + 计划执行审查闭环 + LLM 关键节点介入 + 规则引擎。
 - **R**：6 个真实站点累计 240 页落盘（xnjzgc.cn 98 页 / zztzmjg.com 84 页）；
-  258 项单元测试全绿；评估循环实锤：4 次运行触发 12 次配置调整，
+  260 项单元测试全绿；评估循环实锤：4 次运行触发 12 次配置调整，
   xnjzgc.cn 保存量 1→98、zztzmjg.com 3→84；hnbn666.cn golden 离线 P/R/F1=1.0；
   站点学习模式二次爬取 100% 命中；`reports/campus_report.md` 全部指标离线可复现；
   3 站 × 2 worker 分布式批量调度实跑全 done、恰好一次无双执行。
@@ -343,7 +343,7 @@ playwright install chromium          # JS 模板站渲染用
 python -c "import asyncio; from graph.workflow import run_crawler; asyncio.run(run_crawler('https://example.com', max_steps=3000))"
 
 # 单元测试
-python -m pytest tests -q            # 233 passed
+python -m pytest tests -q            # 260 passed
 
 # MCP 协议双向链路演示（stdio：握手→工具发现→call_tool→错误通道）
 python tools/mcp_client.py https://example.com/
@@ -387,7 +387,7 @@ GUI 入口（校招版双栏工作台）：`python desktop_app.py`（pywebview/W
 │                    #   + vector_retriever(RAG检索) + eval(评估指标/LLM-judge)
 ├── graph/           # 编排级：workflow(Supervisor) / agents(9 Agent) / nodes(节点逻辑) / state(TypedDict)
 │                    #   + react_takeover(深降级 ReAct 接管：行动工具 + 多轮推理)
-├── tests/           # 233 项单元测试（safety / plan / BaseAgent / 工具 / 工具安全
+├── tests/           # 260 项单元测试（safety / plan / BaseAgent / 工具 / 工具安全
 │                    #   / ReAct / 记账 / 去重 / RAG检索 / 评估指标 / FC评估链路
 │                    #   / 图装配冒烟 / golden 指标闭环 / 回归对比 / 深降级接管
 │                    #   / LLM熔断 + 批量抢救 / MCP 工具层 / API 服务层
@@ -460,7 +460,10 @@ summarizer as fallback) answers the classic "how do you manage long
 conversation context" question in code, and the golden eval now scores each
 task with a binary `success = ok and budget_ok` (quality assertions **and**
 LLM cost delta under a per-task cap), reporting an end-to-end task success
-rate. 233 unit tests.
+rate. 260 unit tests. The OpenAI-compatible LLM layer adds multi-provider
+failover (`chat_json`/`chat_stream` switch to `LLM_BACKUP_BASE_URLS` once the
+primary exhausts retries) plus streaming output (also exposed as a
+`/chat/stream` SSE endpoint), all under the same run-level circuit breaker.
 
 **STAR template** (45–60s elevator pitch for English interviews):
 
@@ -470,7 +473,7 @@ rate. 233 unit tests.
 > A: Supervisor multi-agent graph; plan → execute → review loop; LLM reserved
 > for decisions that need judgment; a rule engine for deterministic extraction;
 > memories, observability, and an offline golden-set eval to prove it.
-> R: 6 real sites / 240 pages harvested (98 pages on one); 258 tests green in
+> R: 6 real sites / 240 pages harvested (98 pages on one); 260 tests green in
 > CI; evaluation loops fired 12 config adjustments across 4 runs (saved 1→98
 > on one site); hnbn666.cn golden P/R/F1 = 1.0 offline; a run-level LLM
 > circuit breaker + batched rescue cut one site from overnight stall to an
