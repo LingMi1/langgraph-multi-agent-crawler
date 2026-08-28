@@ -111,6 +111,15 @@ tool_calls 与文本标记两种格式，轮次上限防死循环）。所有 LL
 3. **未知工具显式拒绝**：未注册/恶意工具名直接拒绝并审计（`status=unknown_tool`），
    不打断循环、不落执行。
 
+**工作记忆：预算触发的上下文压缩**（面试高频题"长对话上下文怎么管"的代码答案）：
+记忆分层——长期记忆在外部（`memory.py` SQLite / `vector_retriever` RAG），循环内的
+对话历史是**工作记忆**。`compact_history` 用 `estimate_tokens`（与成本记账同一口径）
+估算历史 token，超预算时保留 `system` + 最近 `keep_recent` 条推理帧（模型收敛仍需要
+它们），窗口外历史折叠成一条摘要消息：**LLM 摘要优先、规则摘要兜底**（双保险，摘要
+失败不会让压缩崩溃；规则摘要如实保留工具名与成功/失败状态）。压缩事件写入 trace
+（`event=context_compact`），可观测、可复盘。测试：`tests/test_context_compaction.py`
+8 个用例覆盖触发边界 / system 与最近帧保留 / 摘要兜底 / 循环集成收敛。
+
 ### 3.9 多 Agent 协作模式：为什么选 Supervisor
 面试高频题"多 Agent 怎么协作"的选型对照（本项目=单层 Supervisor）：
 
@@ -166,6 +175,13 @@ TF-IDF 是 BM25 前的经典基线，稀疏向量换 numpy/向量库即可上量
 与**栏目发现率**（`section_recall`：落盘目录顶层栏目名 与 expected_sections 的召回）——
 验证"这次改动让 recall +0.2"，而不是只报"保存了 N 页"。支持 `--offline --json`
 输出机器可读指标，供脚本消费。
+
+**任务成功率（端到端 Agent 二元口径）**：golden 每个站点的结论不再是单一 `ok`，而是
+`success = ok and budget_ok`——**完成质量**（硬断言全过：保存量 ≥ min_saved、落盘含关键词）
+与**资源效率**（LLM 预算达标：`calls / prompt_tokens / cost` 快照差分，只统计本次任务的
+增量、不跨站点累计；未配 LLM 时不因缺数据误判）**两个维度都要过**。汇总直接输出
+"任务成功率=X/Y (Z%)"。回答面试题"Agent 任务怎么算成功"：质量与成本分开度量，
+预算超限的任务即使内容全对也算失败——这才是生产 Agent 的验收口径。
 
 **回归对比**（`tools/compare_runs.py`）：对比两次 golden 报告的**全指标 diff**
 （saved / recall / f1 / section_recall / keyword_hit），任一主指标变差即判定

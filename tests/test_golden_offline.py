@@ -85,3 +85,52 @@ def test_offline_section_recall(tmp_path, monkeypatch):
     assert r["metrics"]["section_recall"] == pytest.approx(2 / 3, abs=1e-3)
     assert r["metrics"]["recall"] == pytest.approx(3 / 8, abs=1e-3)  # expected_saved=8，实际只落 3
     assert r["ok"] is False  # saved=3 < min_saved=6
+
+
+# ── 任务成功率：预算约束（区分"完成质量"与"资源效率"） ──
+
+def test_offline_success_equals_ok_and_budget_always_ok(tmp_path, monkeypatch):
+    # 离线无 LLM 成本：budget_ok 恒真，success 与 ok 一致（兼容旧口径）
+    monkeypatch.setattr(golden_check, "LOCAL_BACKUP_DIR", str(tmp_path))
+    for i in range(6):
+        _write_html(str(tmp_path), f"www.hnbn666.cn/s{i}.html")
+    r = golden_check._offline_one(SITE)
+    assert r["success"] is True and r["budget_ok"] is True and r["budget"] == {}
+    os.remove(os.path.join(str(tmp_path), "www.hnbn666.cn/s1.html"))  # 删 1 个 → saved=5 < 6
+    r2 = golden_check._offline_one(SITE)
+    assert r2["success"] is False and r2["ok"] is False
+
+
+def test_budget_delta_only_counts_this_task():
+    # 快照差分：只统计本次任务的增量，不跨站点累计
+    before = {"total": {"calls": 10, "prompt_tokens": 1000, "completion_tokens": 200, "cost": 0.05}}
+    after = {"total": {"calls": 15, "prompt_tokens": 1600, "completion_tokens": 300, "cost": 0.08}}
+    d = golden_check._budget_delta(after, before)
+    assert d["total"]["calls"] == 5
+    assert d["total"]["prompt_tokens"] == 600
+    assert d["total"]["completion_tokens"] == 100
+    assert d["total"]["cost"] == pytest.approx(0.03)
+    assert golden_check._budget_delta({}, before) == {}
+
+
+def test_budget_within_cap_pass_and_fail():
+    cap = {"max_calls": 10, "max_tokens": 5000, "max_cost": 0.5}
+    ok_budget = {"total": {"calls": 8, "prompt_tokens": 3000, "completion_tokens": 500, "cost": 0.2}}
+    within, reasons = golden_check._budget_within_cap(ok_budget, cap)
+    assert within is True and reasons == []
+
+    over_calls = {"total": {"calls": 11, "prompt_tokens": 3000, "completion_tokens": 500, "cost": 0.2}}
+    within, reasons = golden_check._budget_within_cap(over_calls, cap)
+    assert within is False
+    assert any("calls=11" in r for r in reasons)
+
+    over_cost = {"total": {"calls": 3, "prompt_tokens": 1000, "completion_tokens": 100, "cost": 0.9}}
+    within, reasons = golden_check._budget_within_cap(over_cost, cap)
+    assert within is False
+    assert any("cost" in r for r in reasons)
+
+
+def test_budget_within_cap_no_data_not_scored():
+    # 未配置 LLM / 无预算数据 → 不评分（不因缺数据误判任务失败）
+    within, reasons = golden_check._budget_within_cap({}, None)
+    assert within is True and reasons == []

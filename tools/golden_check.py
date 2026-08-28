@@ -8,6 +8,9 @@ P/R/F1 覆盖率 / 栏目发现率），用于验证清洗链路与规则改动�
   - precision / recall / f1：保存覆盖率口径（agents/eval.compute_prf）
   - section_recall：期望栏目在落盘目录中的发现率（recall@k 思想的栏目版）
   - keyword_hit：落盘内容关键词断言
+  - success（任务成功率）：硬断言全过 **且** LLM 预算达标（calls/token/成本
+    快照差分，区分"完成质量"与"资源效率"两个维度）——这是 Agent 任务的
+    二元成功口径，聚合后即"端到端任务成功率 X/Y"。
 排序类检索指标（recall@k / ndcg@k）属于 RAG 链路（tools/rag_demo.py），
 两套指标各司其职，README 有定位说明。
 
@@ -23,6 +26,7 @@ import asyncio
 import os
 import re
 import sys
+from typing import Optional
 from urllib.parse import urlparse
 
 # 保证从项目根目录可导入（config / graph / agents）
@@ -135,19 +139,66 @@ def _metrics(site: dict, saved: int, sections: set) -> dict:
     return metrics
 
 
+# ── 任务成功率：预算约束（区分"完成质量"与"资源效率"） ──
+
+DEFAULT_BUDGET_CAP = {"max_calls": 60, "max_tokens": 300_000, "max_cost": 0.5}
+
+
+def _budget_delta(after: dict, before: dict) -> dict:
+    """本次任务的 LLM 成本增量（快照差分，避免跨站点累计污染单任务口径）。"""
+    if not after:
+        return {}
+    before_total = before.get("total", {}) if before else {}
+    return {
+        "total": {
+            k: after["total"].get(k, 0) - before_total.get(k, 0)
+            for k in ("calls", "prompt_tokens", "completion_tokens", "cost")
+        }
+    }
+
+
+def _budget_within_cap(budget: dict, cap: Optional[dict]) -> tuple:
+    """预算约束断言：返回 (within, reasons)。无预算数据（未配 LLM）不评分。"""
+    if not budget:
+        return True, []
+    cap = cap or DEFAULT_BUDGET_CAP
+    t = budget.get("total", {})
+    within, reasons = True, []
+    if t.get("calls", 0) > cap.get("max_calls", 1 << 30):
+        within, reasons = False, reasons + [f"calls={t['calls']} > 上限 {cap['max_calls']}"]
+    if t.get("prompt_tokens", 0) > cap.get("max_tokens", 1 << 30):
+        within, reasons = False, reasons + [
+            f"prompt_tokens={t['prompt_tokens']} > 上限 {cap['max_tokens']}"]
+    if t.get("cost", 0) > cap.get("max_cost", float("inf")):
+        within, reasons = False, reasons + [f"cost=${t['cost']:.4f} > 上限 ${cap['max_cost']}"]
+    return within, reasons
+
+
+def _budget_one_line(budget: dict) -> str:
+    if not budget:
+        return "无LLM记账"
+    t = budget.get("total", {})
+    return f"call={t.get('calls', 0)}/{t.get('prompt_tokens', 0)}tok/${t.get('cost', 0):.4f}"
+
+
 def _run_one(site: dict, max_steps: int = 3000) -> dict:
-    """跑单个 golden 站点，返回结构化评估结果（含指标与耗时）。"""
+    """跑单个 golden 站点，返回结构化评估结果（含指标、预算与耗时）。"""
     import time
 
     t0 = time.time()
     stats = {"saved": 0, "failed": 0}
+    budget = {}
     try:
+        # 预算快照差分：只统计本次任务的 LLM 成本，不跨站点累计
+        from graph.nodes import get_budget_data
+        before = get_budget_data()
         stats = asyncio.run(run_crawler(site["url"], max_steps=max_steps))
+        budget = _budget_delta(get_budget_data(), before)
     except Exception as e:  # noqa: BLE001 —— golden 检查要吞异常并给出失败原因
         return {
-            "name": site["name"], "ok": False, "saved": 0, "min_saved": site["min_saved"],
-            "keyword_hit": False, "reasons": [f"爬取异常: {e}"],
-            "elapsed_s": round(time.time() - t0, 1),
+            "name": site["name"], "ok": False, "success": False, "saved": 0,
+            "min_saved": site["min_saved"], "keyword_hit": False,
+            "reasons": [f"爬取异常: {e}"], "elapsed_s": round(time.time() - t0, 1),
         }
 
     saved, keyword_hit, sections = _scan_backup(site)
@@ -163,9 +214,14 @@ def _run_one(site: dict, max_steps: int = 3000) -> dict:
         ok = False
         reasons.append(f"落盘内容未找到关键词 {site['keyword']!r}")
 
+    budget_ok, budget_reasons = _budget_within_cap(budget, site.get("budget_cap"))
+    reasons += budget_reasons
     return {
-        "name": site["name"], "ok": ok, "saved": saved, "min_saved": site["min_saved"],
+        "name": site["name"], "ok": ok,
+        "success": ok and budget_ok,             # 任务成功率口径：质量 + 资源效率
+        "saved": saved, "min_saved": site["min_saved"],
         "keyword_hit": keyword_hit, "metrics": metrics, "reasons": reasons,
+        "budget": budget, "budget_ok": budget_ok,
         "elapsed_s": round(time.time() - t0, 1),
     }
 
@@ -191,18 +247,21 @@ def _offline_one(site: dict) -> dict:
         reasons.append(f"落盘内容未找到关键词 {site['keyword']!r}")
 
     return {
-        "name": site["name"], "ok": ok, "saved": saved, "min_saved": site["min_saved"],
+        "name": site["name"], "ok": ok, "success": ok, "saved": saved,
+        "min_saved": site["min_saved"],
         "keyword_hit": keyword_hit, "metrics": metrics, "reasons": reasons,
+        "budget": {}, "budget_ok": True,          # 离线不产生 LLM 成本，预算恒达标
         "elapsed_s": round(time.time() - t0, 1), "offline": True,
     }
 
 
 def _format_result(r: dict) -> str:
-    status = "PASS" if r["ok"] else "FAIL"
+    status = "PASS" if r["success"] else "FAIL"
     m = r.get("metrics") or {}
     detail = f"saved={r['saved']} recall={m.get('recall', '-')} f1={m.get('f1', '-')}"
     if m.get("section_recall") is not None:
         detail += f" section={m['section_recall']}"
+    detail += f" budget[{_budget_one_line(r.get('budget'))}]"
     if r.get("reasons"):
         detail += " | " + "; ".join(r["reasons"])
     return f"[{status}] {r['name']:<12} {detail} ({r['elapsed_s']}s)"
@@ -230,15 +289,17 @@ def main() -> int:
 
     runner = _offline_one if args.offline else _run_one
     results = [runner(s) for s in sites]
-    failed = sum(0 if r["ok"] else 1 for r in results)
+    successes = sum(1 if r["success"] else 0 for r in results)
+    failed = len(results) - successes
 
     if args.json:
         import json
         report = {
             "suite": "golden_set",
             "total": len(results),
-            "passed": len(results) - failed,
+            "passed": successes,
             "failed": failed,
+            "success_rate": round(successes / len(results), 4) if results else 0.0,
             "sites": results,
         }
         print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -246,7 +307,8 @@ def main() -> int:
         for r in results:
             print(_format_result(r))
         print("-" * 60)
-        print(f"Golden 评估完成 | 通过={len(results) - failed} 失败={failed} / 共 {len(results)}")
+        rate = f"{successes / len(results):.0%}" if results else "-"
+        print(f"Golden 评估完成 | 任务成功率={successes}/{len(results)} ({rate}) | 失败={failed}")
     return 1 if failed else 0
 
 

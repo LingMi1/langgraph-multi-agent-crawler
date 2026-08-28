@@ -164,6 +164,18 @@ def get_budget_summary() -> str:
     return _llm_budget.summary()
 
 
+def get_budget_data() -> dict:
+    """本次运行的 LLM 成本记账结构化数据（total + by_agent）。
+
+    供 golden 任务成功率评估做"预算约束"断言——区分"任务完成质量"
+    （P/R/F1）与"资源效率"（调用数 / token / 成本），两者共同决定
+    Agent 任务是否算"成功"。
+    """
+    if _llm_budget is None:
+        return {}
+    return _llm_budget.stats()
+
+
 def reset_llm():
     """强制重置 LLM 客户端与成本账，使下次调用使用最新的 config 值；
     同时复位运行级熔断器（新 run 白纸启动，端点恢复自然重试）"""
