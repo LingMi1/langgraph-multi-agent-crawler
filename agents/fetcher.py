@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 import httpx
 import urllib3
 from bs4 import BeautifulSoup
+from urllib.robotparser import RobotFileParser
 
 from .models import SiteProfile, PageData
 from .interfaces import FetcherRouter as FetcherRouterInterface
@@ -178,10 +179,56 @@ def _get_httpx_client() -> httpx.AsyncClient:
                 connect=15.0,
             ),
             follow_redirects=True,
-            verify=False,
+            # TLS 证书校验默认开启；自签证书站通过 CRAWLER_TLS_VERIFY=false 显式豁免
+            verify=bool(getattr(config, "CRAWLER_TLS_VERIFY", True)),
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
         )
     return _HTTPX_CLIENT
+
+
+# ============================================================================
+# robots.txt 合规（零新依赖：stdlib robotparser + httpx 异步抓取）
+#   只遵守 User-agent: * 通配段（诚实边界：不逐 UA 匹配随机 UA 池）。
+#   robots.txt 缺失(404) / 网络失败 / 开关关闭 → 一律放行，合规检查不拖垮抓取。
+# ============================================================================
+
+_ROBOTS_CACHE: dict = {}  # origin -> RobotFileParser | False（False 哨兵=该域放行）
+
+
+async def _robots_allows(url: str) -> bool:
+    """检查目标 URL 是否被站点 robots.txt 允许抓取（默认放行）。
+
+    缓存粒度是"域"（RobotFileParser），不是"URL"——
+    同一域不同路径的允许/禁止不同（Disallow: /private 只禁 /private）。
+    """
+    if not getattr(config, "CRAWLER_RESPECT_ROBOTS", True):
+        return True
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return True
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    cached = _ROBOTS_CACHE.get(origin)
+    if cached is not None:
+        if cached is False:
+            return True  # 该域已确认放行（robots 缺失/异常）
+        return cached.can_fetch("*", url)
+    parser = None
+    try:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
+            resp = await client.get(f"{origin}/robots.txt")
+        if resp.status_code == 200:
+            parser = RobotFileParser()
+            parser.parse(resp.text.splitlines())
+        elif resp.status_code != 404:
+            # 403/5xx 等异常状态 → 放行（无法确认禁止则视为允许）
+            parser = None
+    except Exception:
+        parser = None  # 网络失败放行，避免合规检查拖垮抓取
+    if parser is None:
+        _ROBOTS_CACHE[origin] = False
+        return True
+    _ROBOTS_CACHE[origin] = parser
+    return parser.can_fetch("*", url)
 
 
 # ============================================================================
@@ -385,6 +432,14 @@ class HttpxPlaywrightFetcher(FetcherRouterInterface):
         """
         抓取单个页面。根据 SiteProfile 选择最优策略。
         """
+        # 0. robots.txt 合规检查（禁止则直接返回，不占用去重/缓存）
+        if not await _robots_allows(url):
+            agent_logger.info(f"[FetcherRouter] robots.txt 禁止抓取: {url[:80]}")
+            return PageData(
+                url=url, html="",
+                fetch_method="blocked_by_robots", content_quality_score=0.0,
+            )
+
         # 1. 检查缓存
         if self._memory.is_visited(url):
             cached_html = self._memory.get_cached_html(url)

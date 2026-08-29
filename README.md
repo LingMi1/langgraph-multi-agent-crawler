@@ -11,7 +11,7 @@
 > （行动工具 + 多轮推理，确定性链路全失败后的兜底）** + **LLM 运行级熔断
 > 与批量后置抢救（BFS 热路径零 LLM）** + **MCP 标准协议接入（stdio server + client
 > 双向链路）** + **FastAPI 服务化（REST 三接口 + 单槽治理 + Docker）** + **轻量分布式调度
-> （SQLite 任务队列 + 多进程 worker，零新依赖）** + 262 项单元测试 + **离线校招证据报告
+> （SQLite 任务队列 + 多进程 worker，零新依赖）** + 271 项单元测试 + **离线校招证据报告
 > （`reports/campus_report.md`，6 个真实站点 240 页落盘 + 评估循环量化）**。
 > 传统爬虫确定性为主、LLM 为辅，真实业务问题驱动。
 
@@ -56,7 +56,7 @@
 - **解析清洗**：BeautifulSoup4 · trafilatura · 自研规则引擎（4 级封顶 + 连续去重）
 - **数据模型**：Pydantic v2（严格输出 schema 校验）
 - **持久化**：SQLite（URL 去重 / HTML 缓存 / 站点学习模式）+ 本地文件 + CSV
-- **质量保障**：pytest（262 tests）+ JSONL 全轨迹 + Golden Set 离线评估（P/R/F1 + 栏目发现率）+ LLM-as-judge + GitHub Actions CI（pytest + 双层静态检查）
+- **质量保障**：pytest（271 tests）+ JSONL 全轨迹 + Golden Set 离线评估（P/R/F1 + 栏目发现率）+ LLM-as-judge + GitHub Actions CI（pytest + 双层静态检查）
 
 ## 3. 核心设计
 
@@ -82,22 +82,31 @@ LLM 仅在 Evaluate / CodeGen / 导航分类 / 深降级等关键节点介入，
 2. **输出 schema 校验**：评估/规则输出均为严格 Pydantic 模型，解析失败即降级启发式；
 3. **冲突降权**：LLM 说 passed 但启发式指标强烈反对（saved=0 + failed 高）→ 改判不通过。
 
-### 3.5 经验记忆（SQLite `site_patterns`）
+### 3.5 抓取合规与传输安全（`agents/fetcher.py`）
+1. **robots.txt 合规**（默认开启，`CRAWLER_RESPECT_ROBOTS` 可关）：抓取前校验站点
+   robots.txt 的 `User-agent: *` 通配段（stdlib `robotparser`，零新依赖）；按"域"缓存解析器、
+   同一域不同路径分别裁决；robots 缺失(404)/网络失败 → 放行，合规检查不拖垮抓取；
+   被禁止的 URL 直接标记 `blocked_by_robots`，不占用去重与缓存。
+2. **TLS 证书校验默认开启**（`CRAWLER_TLS_VERIFY`）：httpx 默认 `verify=True`，
+   仅内网自签证书站可通过 `CRAWLER_TLS_VERIFY=false` 显式豁免——默认安全、显式例外。
+3. **频率自限**：`REQUEST_DELAY` 人类浏览节奏 + 并发信号量(5) + 同域缓存去重。
+
+### 3.6 经验记忆（SQLite `site_patterns`）
 首次成功爬完，StorageAgent 写入站点学习模式（site_type / JS 渲染 / 模板特征 / 统计）；
 同站点二次爬取，ScoutAgent 直接命中复用画像——冷启动变热启动，跨 run 配置更稳定。
 
-### 3.6 全轨迹可观测
+### 3.7 全轨迹可观测
 `TraceRecorder` 把每个 Agent 的入参摘要 / 决策 / 出参 / 耗时落盘 JSONL
 （`output/<netloc>/traces/trace_<ts>.jsonl`），事件类型覆盖
 start / end / error / decision / plan / review / memory_hit / store 等，问题可复盘、结果可复现。
 
-### 3.7 轻量 RAG 语义去重（`agents/semdedup.py`）
+### 3.8 轻量 RAG 语义去重（`agents/semdedup.py`）
 MD5 只解决精确重复，同一栏目模板下的"近重复页"（标题不同、正文几乎相同）
 会逃过第一道闸——用**字符级 n-gram Jaccard** 做软去重：无需分词器/向量库，
 中英混排天然适配、确定性可解释，作为 Tool 注册（`jaccard_similarity` /
 `near_duplicate_pages`），为后续真正向量检索（embedding 入库）预留接口。
 
-### 3.8 Function Calling 闭环 + LLM 可靠性（`agents/react.py` + `agents/budget.py`）
+### 3.9 Function Calling 闭环 + LLM 可靠性（`agents/react.py` + `agents/budget.py`）
 ToolRegistry 是"能力声明"，`FunctionCallingLoop` 把链路走通：**LLM 决策调工具 →
 解析 tool_calls → 执行 → 结果回填 → 继续推理 → 收敛回答**（支持 OpenAI 结构化
 tool_calls 与文本标记两种格式，轮次上限防死循环）。所有 LLM 调用经 `TrackedLLM`
@@ -120,7 +129,7 @@ tool_calls 与文本标记两种格式，轮次上限防死循环）。所有 LL
 （`event=context_compact`），可观测、可复盘。测试：`tests/test_context_compaction.py`
 8 个用例覆盖触发边界 / system 与最近帧保留 / 摘要兜底 / 循环集成收敛。
 
-### 3.9 多 Agent 协作模式：为什么选 Supervisor
+### 3.10 多 Agent 协作模式：为什么选 Supervisor
 面试高频题"多 Agent 怎么协作"的选型对照（本项目=单层 Supervisor）：
 
 | 模式 | 思路 | 优点 | 缺点 | 适用 |
@@ -135,7 +144,7 @@ tool_calls 与文本标记两种格式，轮次上限防死循环）。所有 LL
 它的优点——异常可以隔离在单个 Agent 内并降级，整图不中断。若未来要做多站点并行
 采集，可把 Supervisor 升级为"每站点一个 sub-graph + 顶层协调器"的分层模式。
 
-### 3.9.1 节点职责 vs 框架能力（面试追问防线："LangGraph 帮你写了多少？"）
+### 3.10.1 节点职责 vs 框架能力（面试追问防线："LangGraph 帮你写了多少？"）
 先亮底线：**StateGraph 只给了"节点注册 + 条件路由 + recursion_limit + 状态合并"**——
 路由到哪个节点的**判断逻辑**（`route_after_evaluate` 的 passed/adjustment/generation/react 四级裁决）、
 每个节点**失败时的独立降级路径**、以及 9 个节点各自的业务逻辑，全部是本项目写的。
@@ -155,7 +164,7 @@ tool_calls 与文本标记两种格式，轮次上限防死循环）。所有 LL
 
 一句话叙事：*"框架提供的是路由骨架，降级策略是我们设计的——每个节点失败都有一条不依赖 LLM 的确定性出路，LLM 只是在这条链上'增强'，永远不是'必须'。"*
 
-### 3.10 RAG 检索链路（`agents/vector_retriever.py` + `tools/rag_demo.py`）
+### 3.11 RAG 检索链路（`agents/vector_retriever.py` + `tools/rag_demo.py`）
 轻量 RAG 从"去重工具"升级为**完整检索链路**：爬取落盘 HTML → 抽取正文 →
 **字符 n-gram TF-IDF 稀疏向量 + 余弦相似度**建索引 → `rag_search` 工具语义检索。
 纯 Python 零外部依赖（不依赖 numpy/sklearn/embedding），离线可跑、原理可讲：
@@ -164,7 +173,7 @@ TF-IDF 是 BM25 前的经典基线，稀疏向量换 numpy/向量库即可上量
 检索质量可量化：**Recall@k / NDCG@k**（`agents/eval.py`，位置感知增益），
 配合 golden 相关文档集合即可评估"检索是否命中正确栏目"，而不只是"能搜到"。
 
-### 3.11 Agent 评估体系（`agents/eval.py` + `tools/golden_check.py` + `tools/compare_runs.py`）
+### 3.12 Agent 评估体系（`agents/eval.py` + `tools/golden_check.py` + `tools/compare_runs.py`）
 离线评估"三件套"：**P/R/F1 + Recall@k/NDCG@k 指标**（召回/检索任务的量化口径）→
 **LLM-as-judge**（规则覆盖不了的质量维度，输出强制 JSON `{score, reason}`，
 可插拔可审计）→ **回归对比**。让"改动是好是坏"从感觉变成数字。
@@ -194,7 +203,7 @@ SAME——量化回归，不靠肉眼。
 输出不可解析或 LLM 抛异常时逐级降级到纯文本 LLM → 启发式，评估链路不因模型
 不稳定而中断——把"伪多智能体"变成可实锤的 tool-calling 闭环。
 
-### 3.12 深降级 ReAct 自主接管（`graph/react_takeover.py`，面试高频题"LLM 不可替代性"的答案）
+### 3.13 深降级 ReAct 自主接管（`graph/react_takeover.py`，面试高频题"LLM 不可替代性"的答案）
 三层兜底链：**确定性爬虫（默认执行者）→ LLM 评估/规则生成（关键节点介入）→ 自主接管（兜底）**。
 当传统爬虫、配置调整（≤3 次）、LLM 生成规则全部失败后，`ReactTakeoverAgent` 进入 ReAct 模式
 **自主诊断并决策**：LLM 通过 `FunctionCallingLoop` 调用**行动工具**——`fetch_page`（侦察式抓取，
@@ -211,14 +220,14 @@ SAME——量化回归，不靠肉眼。
 react_node 触发 → LLM 多轮行动后收敛 **`decision=retry`** → 新配置重抓 → 收敛落盘 6 页
 （golden P/R/F1=1.0 保持）。`reports/campus_report.md` 的"接管"列即该轨迹证据。
 
-### 3.13 校招证据报告（`tools/gen_campus_report.py` → `reports/`）
+### 3.14 校招证据报告（`tools/gen_campus_report.py` → `reports/`）
 把"真的跑过"变成"能摆上桌的数字"（全部离线可复现）：对 golden 清单中已落盘的站点输出
 **P/R/F1**；对 6 个真实站点输出**保存量/栏目/轨迹统计**（累计 240 页）；从 trace 提取
 **评估循环证据**（调整前 vs 调整后：如 xnjzgc.cn 保存量 1→98、zztzmjg.com 3→84；
 hnbn666 触发 ReAct 接管 `decision=retry`），
 直接回答面试官的"你的指标是多少分 / 评估循环真的工作吗 / LLM 真的会动手吗"。
 
-### 3.14 LLM 运行级熔断 + 批量后置抢救（`agents/breaker.py`，BFS 热路径零 LLM）
+### 3.15 LLM 运行级熔断 + 批量后置抢救（`agents/breaker.py`，BFS 热路径零 LLM）
 问题实锤：LLM 定位选择器曾挂在 BFS **每页同步热路径**——内网推理端点半死时单页重试超时
 30–60s，trafilatura 秒清成功仍被拖死，86 页后整夜停滞。解法是两件套：
 
@@ -238,7 +247,7 @@ hnbn666 触发 ReAct 接管 `decision=retry`），
 **1 次**（选择器持久化缓存命中后抢救阶段零 LLM）、批量抢救 4/4 成功（一次定位
 `article.grid_8 .content` 泛化全组，101–131 字正文救回）。
 
-### 3.15 MCP 标准协议接入（`tools/mcp_server.py` + `tools/mcp_client.py`）
+### 3.16 MCP 标准协议接入（`tools/mcp_server.py` + `tools/mcp_client.py`）
 把项目的行动/分析工具暴露为 **MCP（Model Context Protocol）标准工具**——任何 MCP
 客户端（Claude Desktop / Cursor / 自研 Agent）即插即用，无需了解本项目内部代码：
 
@@ -259,7 +268,7 @@ hnbn666 触发 ReAct 接管 `decision=retry`），
 与 FC 的边界（面试必问）：`FunctionCallingLoop` 是**进程内 LLM→工具**私有协议，
 MCP 是**跨进程/跨厂商标准协议**（JSON-RPC over stdio）——前者零开销，后者可组合。
 
-### 3.16 FastAPI 服务化（`api/server.py` + `Dockerfile`）
+### 3.17 FastAPI 服务化（`api/server.py` + `Dockerfile`）
 
 把多 Agent 爬虫包成 REST 服务——提交任务 / 查进度 / 取结果，补服务化与 SLO 叙事：
 
@@ -282,7 +291,7 @@ MCP 是**跨进程/跨厂商标准协议**（JSON-RPC over stdio）——前者�
 三壳体关系（面试必问）：CLI / Desktop GUI / REST API 共用 `run_langgraph_crawler`
 单入口，服务层零业务逻辑——同一核心三种载体。
 
-### 3.17 轻量分布式调度（`distributed/task_queue.py` + `distributed/scheduler.py`）
+### 3.18 轻量分布式调度（`distributed/task_queue.py` + `distributed/scheduler.py`）
 
 把爬虫从"单进程单站"扩展为"多进程多站"批量调度，**零新依赖**（stdlib sqlite3 +
 multiprocessing）：
@@ -328,7 +337,7 @@ zztzmjg 抢救 2 候选被 hash 去重拦截（此前已保存，跨 run 幂等�
 - **T**：一套系统自适应任意网站并自动化全流程。
 - **A**：Supervisor 多智能体 + 计划执行审查闭环 + LLM 关键节点介入 + 规则引擎。
 - **R**：6 个真实站点累计 240 页落盘（xnjzgc.cn 98 页 / zztzmjg.com 84 页）；
-  262 项单元测试全绿；评估循环实锤：4 次运行触发 12 次配置调整，
+  271 项单元测试全绿；评估循环实锤：4 次运行触发 12 次配置调整，
   xnjzgc.cn 保存量 1→98、zztzmjg.com 3→84；hnbn666.cn golden 离线 P/R/F1=1.0；
   站点学习模式二次爬取 100% 命中；`reports/campus_report.md` 全部指标离线可复现；
   3 站 × 2 worker 分布式批量调度实跑全 done、恰好一次无双执行。
@@ -343,7 +352,7 @@ playwright install chromium          # JS 模板站渲染用
 python -c "import asyncio; from graph.workflow import run_crawler; asyncio.run(run_crawler('https://example.com', max_steps=3000))"
 
 # 单元测试
-python -m pytest tests -q            # 262 passed
+python -m pytest tests -q            # 271 passed
 
 # MCP 协议双向链路演示（stdio：握手→工具发现→call_tool→错误通道）
 python tools/mcp_client.py https://example.com/
@@ -387,7 +396,7 @@ GUI 入口（校招版双栏工作台）：`python desktop_app.py`（pywebview/W
 │                    #   + vector_retriever(RAG检索) + eval(评估指标/LLM-judge)
 ├── graph/           # 编排级：workflow(Supervisor) / agents(9 Agent) / nodes(节点逻辑) / state(TypedDict)
 │                    #   + react_takeover(深降级 ReAct 接管：行动工具 + 多轮推理)
-├── tests/           # 262 项单元测试（safety / plan / BaseAgent / 工具 / 工具安全
+├── tests/           # 271 项单元测试（safety / plan / BaseAgent / 工具 / 工具安全
 │                    #   / ReAct / 记账 / 去重 / RAG检索 / 评估指标 / FC评估链路
 │                    #   / 图装配冒烟 / golden 指标闭环 / 回归对比 / 深降级接管
 │                    #   / LLM熔断 + 批量抢救 / MCP 工具层 / API 服务层
@@ -460,7 +469,7 @@ summarizer as fallback) answers the classic "how do you manage long
 conversation context" question in code, and the golden eval now scores each
 task with a binary `success = ok and budget_ok` (quality assertions **and**
 LLM cost delta under a per-task cap), reporting an end-to-end task success
-rate. 262 unit tests. The OpenAI-compatible LLM layer adds multi-provider
+rate. 271 unit tests. The OpenAI-compatible LLM layer adds multi-provider
 failover (`chat_json`/`chat_stream` switch to `LLM_BACKUP_BASE_URLS` once the
 primary exhausts retries) plus streaming output (also exposed as a
 `/chat/stream` SSE endpoint), all under the same run-level circuit breaker.
@@ -473,7 +482,7 @@ primary exhausts retries) plus streaming output (also exposed as a
 > A: Supervisor multi-agent graph; plan → execute → review loop; LLM reserved
 > for decisions that need judgment; a rule engine for deterministic extraction;
 > memories, observability, and an offline golden-set eval to prove it.
-> R: 6 real sites / 240 pages harvested (98 pages on one); 262 tests green in
+> R: 6 real sites / 240 pages harvested (98 pages on one); 271 tests green in
 > CI; evaluation loops fired 12 config adjustments across 4 runs (saved 1→98
 > on one site); hnbn666.cn golden P/R/F1 = 1.0 offline; a run-level LLM
 > circuit breaker + batched rescue cut one site from overnight stall to an

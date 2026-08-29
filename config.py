@@ -52,6 +52,10 @@ LOCAL_BACKUP_DIR = os.getenv("LOCAL_BACKUP_DIR", "output")
 # ==================== 爬虫配置 ====================
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))
 REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "0.5"))  # 请求间隔（秒），避免被封
+# TLS 证书校验（默认开启；内网自签证书站可设 false 显式豁免，默认安全）
+CRAWLER_TLS_VERIFY = os.getenv("CRAWLER_TLS_VERIFY", "true").lower() in ("true", "1", "yes")
+# robots.txt 合规（默认开启；遵守站点 robots.txt 的 User-agent: * 通配段，请求失败/缺失放行）
+CRAWLER_RESPECT_ROBOTS = os.getenv("CRAWLER_RESPECT_ROBOTS", "true").lower() in ("true", "1", "yes")
 MAX_DEPTH = int(os.getenv("MAX_DEPTH", "5"))              # 嵌套遍历最大深度（默认5层）
 MAX_NAV_DEPTH = int(os.getenv("MAX_NAV_DEPTH", "4"))      # 最大导航级别（1-4级）
 MAX_PAGES = int(os.getenv("MAX_PAGES", "500"))            # 单次任务最大采集URL数
