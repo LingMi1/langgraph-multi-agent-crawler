@@ -126,7 +126,7 @@ python tools/compare_runs.py baseline.json current.json
 python tools/rag_demo.py hnbn666
 ```
 
-Desktop GUI: `python desktop_app.py` (pywebview; the business shell swaps via the `TaskRunner` protocol in `runner_base.py`).
+Desktop GUI (tkinter): `python site_crawler_gui.py` (batch URL import from TXT + platform/API-key config + per-site crawl).
 
 ## Project Structure
 
@@ -144,7 +144,6 @@ Desktop GUI: `python desktop_app.py` (pywebview; the business shell swaps via th
 ├── tools/           # golden_check / compare_runs / static_check / rag_demo /
 │                    #   mcp_server + mcp_client / gen_campus_report
 ├── reports/         # campus_report.{md,json} — offline quantified evidence
-├── webui/           # web frontend (dual theme / stats panel / XSS-escaped)
 ├── memory.py        # SQLite long-term memory (visited_urls / site_patterns)
 ├── schemas.py       # Pydantic models + logging
 ├── .github/         # CI (multi-version Python: pytest + static check + golden)

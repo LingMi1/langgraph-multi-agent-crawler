@@ -62,6 +62,7 @@ class CrawlerGUI:
         self._last_fetched = 0      # 当前站已处理页数（停止时保留显示用）
         self._site_index = 0        # 当前站点序号（1-based）
         self._site_total = 0        # 站点总数
+        self._peak_total = 0        # 当前站已发现页数峰值（防 BFS 队列增长导致百分比倒退）
 
         # ★ 流水线监控状态
         self._current_url = ""      # 当前正在处理的页面 URL
@@ -383,6 +384,7 @@ class CrawlerGUI:
             self._site_index = i + 1
             self._site_total = total_targets
             self._last_fetched = 0
+            self._peak_total = 0
             self._update_progress(0, 1, f"爬取中 第{i+1}/{total_targets}个站: {url[:50]}")
 
             site_dir = None  # 记录当前网站的保存路径
@@ -456,18 +458,45 @@ class CrawlerGUI:
             self.root.after(0, self._reset_ui)
 
     def _lg_progress(self, fetched, queue_len, url, phase="fetch"):
-        """LangGraph 进度回调：fetched=已处理页数, queue_len=剩余/总数页数"""
+        """LangGraph 进度回调：fetched=已处理数, queue_len=剩余数
+
+        阶段加权进度，保证单调且只有全部完成才到 100%：
+          scout     → 3%
+          navigate  → 5%
+          fetch     → 5%–75%（BFS：分母取峰值，防队列增长导致倒退）
+          rescue    → 75%–87%（按抢救条数推进）
+          evaluate  → 90%
+          media     → 90%–98%（按内嵌图片页数推进）
+          storage   → 99%（写文件，完成后由 _reset_ui 置 100%）
+        """
         self._last_fetched = fetched
         self._current_url = url or ""
         self._phase = phase
-        total = fetched + queue_len
-        if phase == "media":
-            label = f"内嵌图片 {fetched}/{total} 页"
-        elif phase == "storage":
-            label = "写入文件..."
-        else:
+        if phase == "scout":
+            self._set_progress_pct(0.03, "侦察站点结构...")
+        elif phase == "navigate":
+            self._set_progress_pct(0.05, "生成栏目导航...")
+        elif phase == "fetch":
+            total = fetched + queue_len
+            if total > self._peak_total:
+                self._peak_total = total
+            frac = (fetched / self._peak_total) if self._peak_total > 0 else 0
             label = f"爬取中 第{self._site_index}/{self._site_total}个站 · 已处理{fetched}页 剩{queue_len}页"
-        self._update_progress(fetched, total, label)
+            self._set_progress_pct(0.05 + 0.70 * frac, label)
+        elif phase == "rescue":
+            total = fetched + queue_len
+            frac = (fetched / total) if total > 0 else 0
+            label = f"批量抢救低质页 {fetched}/{total}"
+            self._set_progress_pct(0.75 + 0.12 * frac, label)
+        elif phase == "evaluate":
+            self._set_progress_pct(0.90, "LLM 评估与汇总...")
+        elif phase == "media":
+            total = fetched + queue_len
+            frac = (fetched / total) if total > 0 else 0
+            label = f"内嵌图片 {fetched}/{total} 页"
+            self._set_progress_pct(0.90 + 0.08 * frac, label)
+        else:  # storage
+            self._set_progress_pct(0.99, "写入文件...")
 
     def _langgraph_log(self, msg: str):
         """LangGraph 工作流的日志回调，转发到 GUI 日志窗口。自动识别反爬拦截日志"""
@@ -539,6 +568,11 @@ class CrawlerGUI:
 
     def _update_progress(self, current, total, label):
         self.root.after(0, lambda: self._set_progress(current, total, label))
+
+    def _set_progress_pct(self, frac, label):
+        """按百分比(0~1)设置进度条，钳制在 0~100，避免阶段加权越界。"""
+        frac = max(0.0, min(1.0, frac))
+        self.root.after(0, lambda: self._set_progress(frac * 100, 100, label))
 
     def _set_progress(self, c, t, lb):
         self.progress_bar['value'] = (c / t) * 100 if t > 0 else 0

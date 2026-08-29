@@ -38,6 +38,7 @@ __pycache__/
 *.pyo
 .pytest_cache/
 .venv/
+.venv_pwv/
 venv/
 
 # ── 本地 GUI 运行时（pywebview --target 安装目录，不入库） ──

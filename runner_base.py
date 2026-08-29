@@ -1,7 +1,7 @@
 """
 runner_base.py — 业务可替换的 TaskRunner 协议
 
-桌面壳（desktop_app.py + webui/）只面向 TaskRunner 接口运行：
+桌面壳只面向 TaskRunner 接口运行：
     run(inputs, log_cb, progress_cb, pause_event, stop_event) -> stats
 
 换业务 = 实现一个 TaskRunner 子类 + 声明字段 schema，

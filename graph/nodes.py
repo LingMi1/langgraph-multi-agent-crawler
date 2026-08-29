@@ -984,6 +984,13 @@ async def scout_node(state: CrawlerState) -> dict:
         f"js={profile.needs_js_render} | type={profile.site_type}"
     )
 
+    _pcb = state.get("progress_callback")
+    if _pcb:
+        try:
+            _pcb(1, 1, url, "scout")
+        except Exception:
+            pass
+
     return {
         "site_profile": profile.model_dump(),
         "site_name": profile.title[:60],
@@ -1121,6 +1128,14 @@ async def navigate_node(state: CrawlerState) -> dict:
         seen_keys.append(hp_key)
 
     agent_logger.info(f"[Graph::navigate] 入队 {len(queue)} 个链接")
+
+    _pcb = state.get("progress_callback")
+    if _pcb:
+        try:
+            _pcb(1, 1, url, "navigate")
+        except Exception:
+            pass
+
     return {
         "queue": queue,
         "seen_url_keys": seen_keys,
@@ -2102,6 +2117,10 @@ async def _rescue_pending_pages(
         if row:
             rows.append(row)
 
+    # ★ 进度回调（GUI 进度条）：抢救阶段逐条上报
+    _pcb = state.get("progress_callback")
+    _rescue_total = len(entries) + len(overflow)
+    _rescue_done = 0
     for e in entries:
         tkey = _tkey(e.get("url", ""))
         if not config.DEEPSEEK_API_KEY:
@@ -2113,8 +2132,20 @@ async def _rescue_pending_pages(
         else:
             skip = ""
         await _run_one(e, skip)
+        _rescue_done += 1
+        if _pcb:
+            try:
+                _pcb(_rescue_done, _rescue_total, e.get("url", ""), "rescue")
+            except Exception:
+                pass
     for e in overflow:
         await _run_one(e, "budget")
+        _rescue_done += 1
+        if _pcb:
+            try:
+                _pcb(_rescue_done, _rescue_total, e.get("url", ""), "rescue")
+            except Exception:
+                pass
 
     if rows or stats_inc:
         agent_logger.info(
@@ -2211,6 +2242,14 @@ async def evaluate_node(state: CrawlerState) -> dict:
     #   seen_hashes 拦截其二次落盘（记 rescue_dup）。
     if rescue_seen is not None:
         ret["seen_hashes"] = rescue_seen
+
+    # ★ 进度回调：评估阶段完成（GUI 进度条推进到评估区间末）
+    _pcb = state.get("progress_callback")
+    if _pcb:
+        try:
+            _pcb(1, 1, seed_url, "evaluate")
+        except Exception:
+            pass
     return ret
 
 

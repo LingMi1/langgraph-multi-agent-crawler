@@ -126,7 +126,7 @@ python tools/compare_runs.py baseline.json current.json
 python tools/rag_demo.py hnbn666
 ```
 
-桌面 GUI：`python desktop_app.py`（pywebview；业务壳通过 `runner_base.py` 的 `TaskRunner` 协议切换）。
+桌面 GUI（tkinter）：`python site_crawler_gui.py`（TXT 批量导入网址 + 平台/API Key 配置 + 逐站爬取）。
 
 ## 目录结构
 
@@ -144,7 +144,6 @@ python tools/rag_demo.py hnbn666
 ├── tools/           # golden_check / compare_runs / static_check / rag_demo /
 │                    #   mcp_server + mcp_client / gen_campus_report
 ├── reports/         # campus_report.{md,json} — 离线量化证据
-├── webui/           # Web 前端（双主题 / 统计面板 / XSS 转义）
 ├── memory.py        # SQLite 长期记忆（visited_urls / site_patterns）
 ├── schemas.py       # Pydantic 模型 + 日志
 ├── .github/         # CI（多版本 Python：pytest + 静态检查 + golden 校验）
