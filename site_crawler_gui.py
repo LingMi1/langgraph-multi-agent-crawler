@@ -385,6 +385,7 @@ class CrawlerGUI:
             self._site_total = total_targets
             self._last_fetched = 0
             self._fetch_ratio = 0
+            self._peak_total = 0
             self._update_progress(0, 1, f"爬取中 第{i+1}/{total_targets}个站: {url[:50]}")
 
             site_dir = None  # 记录当前网站的保存路径
@@ -461,38 +462,63 @@ class CrawlerGUI:
         """LangGraph 进度回调
 
         参数语义分两种：
-          fetch     → fetched=已处理页数, queue_len=剩余页数（BFS 动态总量）
+          fetch     → fetched=已抓取页数, queue_len=待处理页数（BFS 动态总量）
+          rescue_locate → fetched=已定位模板数, queue_len=模板总数
           rescue/media → fetched=已处理条数, queue_len=总条数
           scout/navigate/evaluate/storage → 阶段完成标记
 
-        阶段加权进度，保证单调且只有全部完成才到 100%：
-          scout     → 3%
-          navigate  → 5%
-          fetch     → 5%–75%（实时比例 fetched/(fetched+queue) 取峰值，防倒退；
-                             队列清空即达 75%，与「剩 0 页」标签一致）
-          rescue    → 75%–87%（已抢救条数/总条数）
-          evaluate  → 90%
-          media     → 90%–98%（已内嵌页数/总页数）
-          storage   → 99%（写文件，完成后由 _reset_ui 置 100%）
+        阶段加权进度，保证单调渐进且只有全部完成才到 100%：
+          scout          → 3%
+          navigate       → 5%
+          fetch          → 5%–55%（max(实时比例, 峰值分母比例)，随抓取渐进、
+                            队列清空时恰好 55%，防倒退防猛跳）
+          rescue_locate  → 55%–63%（已定位模板数/模板总数）
+          rescue         → 63%–88%（已抢救条数/总条数；抢救最耗时，给足视觉区间，
+                            每条候选 10-20s，若区间太窄会感觉"卡住"）
+          evaluate       → 90%
+          media          → 90%–98%（已内嵌页数/总页数）
+          storage        → 99%（写文件，完成后由 _reset_ui 置 100%）
+
+        总数口径统一为「页数」：站点/分页/内链均为 BFS 动态发现（分页链接在
+        抓取时从 JS 分页组件提取），总页数无法在爬行前预知，故文案分母用
+        「峰值已知总数」（每次回调发现更大总量即更新，只增不减，Y≥X 恒成立），
+        条值用 max(实时比例, 峰值分母比例) 保证单调不倒退。
         """
-        self._last_fetched = fetched
         self._current_url = url or ""
         self._phase = phase
+        # ★ 只有「页」单位阶段更新已抓取页数；rescue 是「条」单位，
+        #   避免停止时误报"处理到第 N 页"。
+        if phase in ("fetch", "media"):
+            self._last_fetched = fetched
         if phase == "scout":
             self._set_progress_pct(0.03, "侦察站点结构...")
         elif phase == "navigate":
             self._set_progress_pct(0.05, "生成栏目导航...")
         elif phase == "fetch":
+            # 渐进且准确：实时比例 live=已抓取/(已抓取+待处理) 保证队列清空时
+            # 恰好到 75%；峰值分母 peak_frac 保证随抓取持续渐进、不被队列
+            # 增长压制在低位（否则 BFS 排空瞬间从低位猛跳到 75%）。
             total = fetched + queue_len
+            if total > self._peak_total:
+                self._peak_total = total
             live = (fetched / total) if total > 0 else 0
-            if live > self._fetch_ratio:
-                self._fetch_ratio = live
-            label = f"爬取中 第{self._site_index}/{self._site_total}个站 · 已处理{fetched}页 剩{queue_len}页"
-            self._set_progress_pct(0.05 + 0.70 * self._fetch_ratio, label)
+            peak_frac = (fetched / self._peak_total) if self._peak_total > 0 else 0
+            frac = max(live, peak_frac)
+            if frac > self._fetch_ratio:
+                self._fetch_ratio = frac
+            # ★ 文案口径统一为「页」：X=已抓取页数，Y=峰值已知总页数（动态），
+            #   Z=待处理页数；X+Y 与 Z 同源于 BFS 队列，不再出现"13 页对满条"。
+            label = (f"爬取中 第{self._site_index}/{self._site_total}个站 · "
+                     f"已抓取 {fetched}/{self._peak_total} 页 · 待处理 {queue_len} 页")
+            self._set_progress_pct(0.05 + 0.50 * self._fetch_ratio, label)
+        elif phase == "rescue_locate":
+            frac = (fetched / queue_len) if queue_len > 0 else 0
+            label = f"定位内容模板 {fetched}/{queue_len}"
+            self._set_progress_pct(0.55 + 0.08 * frac, label)
         elif phase == "rescue":
             frac = (fetched / queue_len) if queue_len > 0 else 0
-            label = f"批量抢救低质页 {fetched}/{queue_len}"
-            self._set_progress_pct(0.75 + 0.12 * frac, label)
+            label = f"批量抢救 {fetched}/{queue_len} 条"
+            self._set_progress_pct(0.63 + 0.25 * frac, label)
         elif phase == "evaluate":
             self._set_progress_pct(0.90, "LLM 评估与汇总...")
         elif phase == "media":

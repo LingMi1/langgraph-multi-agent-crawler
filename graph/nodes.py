@@ -2079,13 +2079,20 @@ async def _rescue_pending_pages(
     _pcb = state.get("progress_callback")
     _rescue_total = len(entries) + len(overflow)
     _rescue_done = 0
-    _locate_units = 0
+    _locate_total = 0
+    _locate_done = 0
+
+    def _rp_locate() -> None:
+        if _pcb:
+            try:
+                _pcb(_locate_done, _locate_total, "", "rescue_locate")
+            except Exception:
+                pass
 
     def _rp() -> None:
         if _pcb:
             try:
-                _pcb(_locate_units + _rescue_done, _locate_units + _rescue_total,
-                     "", "rescue")
+                _pcb(_rescue_done, _rescue_total, "", "rescue")
             except Exception:
                 pass
 
@@ -2093,19 +2100,20 @@ async def _rescue_pending_pages(
         groups: Dict[str, List[Dict]] = {}
         for e in entries:
             groups.setdefault(_tkey(e.get("url", "")), []).append(e)
+        _locate_total = len(groups)
         max_tpl = max(1, int(getattr(config, "RESCUE_MAX_TEMPLATES", 6)))
         ordered = sorted(groups.items(), key=lambda kv: -len(kv[1]))
         for tkey, group in ordered:
-            _locate_units += 1
+            _locate_done += 1
             if len(located) >= max_tpl:
                 locate_failed.add(tkey)  # 模板预算耗尽 → 组内降级保存
-                _rp()
+                _rp_locate()
                 continue
             rep = group[0]
             html = await _rescue_fetch_html(rep.get("url", ""), profile, config_dict)
             if not html or len(html) < 100:
                 locate_failed.add(tkey)
-                _rp()
+                _rp_locate()
                 continue
             selector = await _llm_locate_content_selector(
                 html, rep.get("url", ""), seed_url, site_name, allow_llm=True
@@ -2114,7 +2122,7 @@ async def _rescue_pending_pages(
                 located[tkey] = selector
             else:
                 locate_failed.add(tkey)
-            _rp()
+            _rp_locate()
             if not llm_breaker.check():
                 # 定位途中熔断打开：剩余模板全部降级保存（不在半死端点上继续等）
                 for tk2 in groups:
