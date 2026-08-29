@@ -290,8 +290,13 @@ _FILEID_RE = re.compile(r"^[0-9a-f]{16}\.html$")  # 文件名=url 的 md5 前 16
 
 
 class OrchestratorStreamRequest(BaseModel):
-    """工作台 /orchestrator/stream 请求体（博宇前端契约）。"""
-    url: str = Field(..., description="目标网站首页 URL")
+    """工作台 /orchestrator/stream 请求体（博宇前端契约）。
+
+    urls 为批量种子列表（每行一个，对齐 GUI 的 txt 导入语义）；
+    url 保留兼容单 URL 调用，合并后去重。
+    """
+    url: str = Field("", description="目标网站首页 URL（单 URL 兼容）")
+    urls: List[str] = Field(default_factory=list, description="批量目标网站 URL 列表")
     provider: str = Field("deepseek")
     model: str = Field("")
     api_key_env: str = Field("")
@@ -342,12 +347,71 @@ def _save_config(cfg: Dict[str, Any]) -> None:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
 
 
+def _sync_llm_config() -> None:
+    """把 config.json 的 LLM 配置同步到运行时（网页端配置中心真正生效）。
+
+    三步：① 写 env（子进程/其他消费者可见）；② 直接覆写 config 模块属性
+    （config.py 常量在 import 时定格，而 agents.llm_pipeline._providers 是调用时
+    读取 config.DEEPSEEK_*，覆写后立即生效）；③ reset_llm() 丢弃已缓存客户端。
+    """
+    cfg = _load_config()
+    pairs = {
+        "api_key": "DEEPSEEK_API_KEY",
+        "base_url": "DEEPSEEK_BASE_URL",
+        "model_name": "DEEPSEEK_MODEL",
+    }
+    values = {}
+    for field, env_name in pairs.items():
+        val = str(cfg.get(field, "") or "").strip()
+        if not val:
+            continue
+        values[env_name] = val
+        if not os.environ.get(env_name):
+            os.environ[env_name] = val
+    if values:
+        try:
+            import config as _crawler_config
+
+            for env_name, val in values.items():
+                setattr(_crawler_config, env_name, val)
+            from agents.llm_pipeline import reset_llm
+
+            reset_llm()
+        except Exception:  # noqa: BLE001 — 桥接失败不阻断配置保存
+            pass
+
+
+_sync_llm_config()  # 模块加载即同步，早于 main 的延迟 import
+
+
 # ── 域名 / 结果目录工具 ──
 def _domain_of(url: str) -> str:
     from urllib.parse import urlparse
 
     parsed = urlparse(url if "://" in url else "https://" + url)
     return parsed.netloc or ""
+
+
+def _normalize_urls(req: "OrchestratorStreamRequest") -> List[str]:
+    """合并 urls + url（单 URL 兼容），去重（去尾部斜杠）、跳过注释/空行/非 http 行。"""
+    raw: List[str] = list(req.urls or [])
+    if req.url.strip():
+        raw.append(req.url)
+    seen: set = set()
+    out: List[str] = []
+    for item in raw:
+        for chunk in re.split(r"[\s,，;；]+", item.strip()):
+            chunk = chunk.strip()
+            if not chunk or chunk.startswith("#"):
+                continue
+            if not chunk.startswith(("http://", "https://")):
+                continue
+            key = chunk.rstrip("/")
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(chunk)
+    return out
 
 
 def _file_id(url: str) -> str:
@@ -470,6 +534,7 @@ async def llm_config_save(
     if req.active_model:
         cfg["model_name"] = req.active_model
     _save_config(cfg)
+    _sync_llm_config()
     return {"ok": True, "error": ""}
 
 
@@ -488,6 +553,7 @@ async def llm_keys_save(
             cfg["api_key"] = key.strip()
             saved_keys[env] = key.strip()
     _save_config(cfg)
+    _sync_llm_config()
     return {"ok": True, "error": ""}
 
 
@@ -704,6 +770,150 @@ async def orchestrator_import_db(
     }
 
 
+# ── 历史记录（SQLite 持久化，跨浏览器/重启保留） ──
+_HISTORY_DB = PROJECT_ROOT / "history.db"
+
+
+def _history_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(_HISTORY_DB)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS history ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " created_at TEXT NOT NULL,"
+        " payload TEXT NOT NULL)"
+    )
+    return conn
+
+
+@app.get("/history")
+async def history_list(
+    limit: int = 100,
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    _check_api_key(_extract_key(x_api_key, authorization))
+    conn = _history_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, created_at, payload FROM history ORDER BY id DESC LIMIT ?",
+            (max(1, min(limit, 200)),),
+        ).fetchall()
+    finally:
+        conn.close()
+    items = []
+    for rid, created_at, payload in rows:
+        try:
+            p = json.loads(payload)
+        except Exception:
+            p = {}
+        items.append({
+            "id": rid,
+            "created_at": created_at,
+            "urls": p.get("urls", []),
+            "first_url": (p.get("urls") or [""])[0],
+            "status": p.get("status", ""),
+            "page_count": p.get("page_count", 0),
+            "site_mode": p.get("site_mode", "auto"),
+            "result_dirs": p.get("result_dirs", []),
+        })
+    return {"items": items}
+
+
+@app.get("/history/{hid}")
+async def history_detail(
+    hid: int,
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    _check_api_key(_extract_key(x_api_key, authorization))
+    conn = _history_conn()
+    try:
+        row = conn.execute("SELECT payload FROM history WHERE id=?", (hid,)).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        raise HTTPException(404, "历史记录不存在")
+    try:
+        payload = json.loads(row[0])
+    except Exception:
+        raise HTTPException(500, "历史记录损坏")
+    return {"id": hid, **payload}
+
+
+@app.post("/history")
+async def history_create(
+    body: Dict[str, Any],
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    _check_api_key(_extract_key(x_api_key, authorization))
+    payload = {
+        "created_at": body.get("timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "urls": body.get("urls", []),
+        "status": body.get("status", ""),
+        "page_count": body.get("page_count", 0),
+        "site_mode": body.get("site_mode", "auto"),
+        "result_dirs": body.get("result_dirs", []),
+        "pages": body.get("pages", []),
+        "sites": body.get("sites", []),
+        "metrics": body.get("metrics"),
+        "cleaned_dir": body.get("cleaned_dir", ""),
+        "clean_stats": body.get("clean_stats", {}),
+        "edits": body.get("edits", {}),
+    }
+    conn = _history_conn()
+    try:
+        cur = conn.execute(
+            "INSERT INTO history (created_at, payload) VALUES (?, ?)",
+            (payload["created_at"], json.dumps(payload, ensure_ascii=False)),
+        )
+        conn.commit()
+        hid = cur.lastrowid
+    finally:
+        conn.close()
+    conn = _history_conn()
+    try:
+        conn.execute(
+            "DELETE FROM history WHERE id NOT IN "
+            "(SELECT id FROM history ORDER BY id DESC LIMIT 100)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "id": hid}
+
+
+@app.delete("/history/{hid}")
+async def history_delete(
+    hid: int,
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    _check_api_key(_extract_key(x_api_key, authorization))
+    conn = _history_conn()
+    try:
+        conn.execute("DELETE FROM history WHERE id=?", (hid,))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.delete("/history")
+async def history_clear(
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    _check_api_key(_extract_key(x_api_key, authorization))
+    conn = _history_conn()
+    try:
+        conn.execute("DELETE FROM history")
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
 # ── SSE 适配层：/orchestrator/stream ──
 def _node_state_for(node: str, req: OrchestratorStreamRequest, page_count: int,
                     domain: str, rows_count: int = 0) -> Dict[str, Any]:
@@ -734,10 +944,15 @@ def _sse_frame(evt: Dict[str, Any]) -> str:
 
 async def _run_crawl_stream(task: Dict[str, Any], req: OrchestratorStreamRequest,
                             q: asyncio.Queue, loop: asyncio.AbstractEventLoop) -> None:
-    """后台桥接：同步爬虫线程产事件 → call_soon_threadsafe → asyncio 队列 → SSE 帧。"""
+    """后台桥接：同步爬虫线程产事件 → call_soon_threadsafe → asyncio 队列 → SSE 帧。
+
+    多 URL 时逐个串行爬取：每个网站一轮完整的 DAG（probe→…→finalize），
+    轮间发 site_start 事件供前端区分站点。
+    """
     from main import run_langgraph_crawler
 
-    domain = _domain_of(req.url)
+    urls = _normalize_urls(req)
+    total = len(urls)
 
     def emit(evt: Dict[str, Any]) -> None:
         loop.call_soon_threadsafe(q.put_nowait, evt)
@@ -745,69 +960,76 @@ async def _run_crawl_stream(task: Dict[str, Any], req: OrchestratorStreamRequest
     def _log(msg: str) -> None:
         task["logs"].append(str(msg))
 
-    state = {"node": None, "saw_fetch": False, "attempt": 1, "fetched": 0,
-             "saw_clean": False}
+    any_failed = False
+    for i, url in enumerate(urls):
+        domain = _domain_of(url)
+        state = {"node": None, "saw_fetch": False, "attempt": 1, "fetched": 0,
+                 "saw_clean": False}
 
-    def _progress(fetched: int, queue_len: int, url: str, phase: str) -> None:
-        node = _NODE_BY_PHASE.get(phase, "crawl")
-        if node == "clean":
-            state["saw_clean"] = True
-        if node != state["node"]:
-            if state["node"] is not None:
-                emit({"type": "node_end", "node": state["node"],
-                      "state": _node_state_for(state["node"], req, state["fetched"], domain)})
-            if node == "crawl" and state["saw_fetch"]:
-                # evaluate 调整后重爬 = 博宇「换策略重试」语义
-                state["attempt"] += 1
-                emit({"type": "retry", "attempt": state["attempt"]})
-            state["node"] = node
-            emit({"type": "node_start", "node": node})
-        if phase == "fetch":
-            state["saw_fetch"] = True
-            state["fetched"] = fetched
-            emit({
-                "type": "page_crawled", "url": url, "status_code": 200,
-                "success": True, "title": "", "depth": 0,
-                "page_count": fetched, "result_dir": domain,
-                "filename": _file_id(url),
-            })
-        elif phase == "media":
-            emit({"type": "cleaning_progress", "file": url, "status": "cleaned",
-                  "current": fetched, "total": max(queue_len, fetched), "message": ""})
-        task["progress"] = {"fetched": fetched, "queue_len": queue_len,
-                            "url": url, "phase": phase}
+        emit({"type": "site_start", "url": url, "index": i + 1, "total": total})
 
-    try:
-        saved = await asyncio.to_thread(
-            run_langgraph_crawler,
-            req.url, concurrency=max(1, int(req.concurrent)),
-            log_callback=_log, reset_memory=bool(req.no_cache),
-            progress_callback=_progress,
-        )
-        task["saved"] = int(saved or 0)
-        task["status"] = "done"
-    except Exception as e:  # noqa: BLE001
-        task["status"] = "failed"
-        task["error"] = f"{type(e).__name__}: {e}"
-        task["logs"].append(f"[api] 任务失败: {task['error']}")
+        def _progress(fetched: int, queue_len: int, u: str, phase: str,
+                      _state: Dict[str, Any] = state, _domain: str = domain) -> None:
+            node = _NODE_BY_PHASE.get(phase, "crawl")
+            if node == "clean":
+                _state["saw_clean"] = True
+            if node != _state["node"]:
+                if _state["node"] is not None:
+                    emit({"type": "node_end", "node": _state["node"],
+                          "state": _node_state_for(_state["node"], req, _state["fetched"], _domain)})
+                if node == "crawl" and _state["saw_fetch"]:
+                    # evaluate 调整后重爬 = 博宇「换策略重试」语义
+                    _state["attempt"] += 1
+                    emit({"type": "retry", "attempt": _state["attempt"]})
+                _state["node"] = node
+                emit({"type": "node_start", "node": node})
+            if phase == "fetch":
+                _state["saw_fetch"] = True
+                _state["fetched"] = fetched
+                emit({
+                    "type": "page_crawled", "url": u, "status_code": 200,
+                    "success": True, "title": "", "depth": 0,
+                    "page_count": fetched, "result_dir": _domain,
+                    "filename": _file_id(u),
+                })
+            elif phase == "media":
+                emit({"type": "cleaning_progress", "file": u, "status": "cleaned",
+                      "current": fetched, "total": max(queue_len, fetched), "message": ""})
+            task["progress"] = {"fetched": fetched, "queue_len": queue_len,
+                                "url": u, "phase": phase}
 
-    # 收尾：关掉当前节点 → 发 finalize（带 result_dir）→ done
-    rows = _read_csv_rows(domain)
-    if state.get("saw_clean") and state["node"] == "finalize":
-        # _progress 阶段 CSV 尚未落盘，clean_stats.total 为 0；此处用真实行数补发
-        emit({"type": "node_end", "node": "clean",
-              "state": _node_state_for("clean", req, state["fetched"], domain,
+        try:
+            saved = await asyncio.to_thread(
+                run_langgraph_crawler,
+                url, concurrency=max(1, int(req.concurrent)),
+                log_callback=_log, reset_memory=bool(req.no_cache),
+                progress_callback=_progress,
+            )
+            task["saved"] = int(saved or 0) + int(task.get("saved") or 0)
+        except Exception as e:  # noqa: BLE001 — 单站失败不阻断后续站点
+            any_failed = True
+            task["error"] = f"{type(e).__name__}: {e}"
+            task["logs"].append(f"[api] {url} 爬取失败: {task['error']}")
+
+        # 该站收尾：关掉当前节点 → finalize（带 result_dir）→ 下一站
+        rows = _read_csv_rows(domain)
+        if state.get("saw_clean") and state["node"] == "finalize":
+            # _progress 阶段 CSV 尚未落盘，clean_stats.total 为 0；此处用真实行数补发
+            emit({"type": "node_end", "node": "clean",
+                  "state": _node_state_for("clean", req, state["fetched"], domain,
+                                           rows_count=len(rows))})
+        if state["node"] is not None and state["node"] != "finalize":
+            emit({"type": "node_end", "node": state["node"],
+                  "state": _node_state_for(state["node"], req, state["fetched"], domain,
+                                           rows_count=len(rows))})
+        if state["node"] != "finalize":
+            emit({"type": "node_start", "node": "finalize"})
+        emit({"type": "node_end", "node": "finalize",
+              "state": _node_state_for("finalize", req, state["fetched"], domain,
                                        rows_count=len(rows))})
-    if state["node"] is not None and state["node"] != "finalize":
-        emit({"type": "node_end", "node": state["node"],
-              "state": _node_state_for(state["node"], req, state["fetched"], domain,
-                                       rows_count=len(rows))})
-    if state["node"] != "finalize":
-        emit({"type": "node_start", "node": "finalize"})
-    emit({"type": "node_end", "node": "finalize",
-          "state": _node_state_for("finalize", req, state["fetched"], domain,
-                                   rows_count=len(rows))})
-    emit({"type": "done", "status": "success" if task["status"] == "done" else "failed"})
+
+    task["status"] = "done" if not any_failed else "failed"
+    emit({"type": "done", "status": "success" if not any_failed else "failed"})
     loop.call_soon_threadsafe(q.put_nowait, None)  # 哨兵：结束 SSE 流（与 emit 同序，排在 done 之后）
 
 
@@ -832,7 +1054,7 @@ async def orchestrator_stream(
     busy = _running_task()
     if busy:
         raise HTTPException(409, f"已有爬取任务在运行（单爬虫槽），task_id={busy['task_id']}")
-    if not req.url.strip():
+    if not _normalize_urls(req):
         raise HTTPException(422, "url 不能为空")
     task_id = uuid.uuid4().hex[:12]
     task = {

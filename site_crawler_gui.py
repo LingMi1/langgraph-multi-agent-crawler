@@ -1,5 +1,5 @@
 """
-网站爬取工具 v1.2 — GUI 入口（预检 + 多平台兼容）
+langgraph-multi-agent-crawler — GUI 入口（预检 + 多平台兼容）
 通过 TXT 文件批量导入网址，逐站爬取并保存。
 """
 
@@ -44,7 +44,7 @@ PLATFORM_NAMES = [p[0] for p in PLATFORMS]
 class CrawlerGUI:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("网站爬取工具 v1.3")
+        self.root.title("langgraph-multi-agent-crawler")
         self.root.geometry("680x820")
         self.root.resizable(True, True)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)

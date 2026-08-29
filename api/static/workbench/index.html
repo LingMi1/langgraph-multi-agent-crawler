@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>智慧企业数据获取平台</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><circle cx='12' cy='12' r='10' fill='none' stroke='%232563EB' stroke-width='2'/><ellipse cx='12' cy='12' rx='4' ry='10' fill='none' stroke='%232563EB' stroke-width='2'/><path d='M2 12h20' fill='none' stroke='%232563EB' stroke-width='2'/></svg>" />
+<title>langgraph-multi-agent-crawler</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><circle cx='12' cy='12' r='10' fill='none' stroke='%230D9488' stroke-width='2'/><ellipse cx='12' cy='12' rx='4' ry='10' fill='none' stroke='%230D9488' stroke-width='2'/><path d='M2 12h20' fill='none' stroke='%230D9488' stroke-width='2'/></svg>" />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="vendor/marked.min.js"></script>
 <script src="vendor/purify.min.js"></script>
@@ -18,11 +18,11 @@ window.jsBeautify = jsBeautify;
 </script>
 <style>
   :root {
-    --primary: #2563EB;
-    --primary-hov: #1D4ED8;
-    --primary-lit: #EFF6FF;
-    --accent: #7C3AED;
-    --bg: #F8FAFC;
+    --primary: #0D9488;
+    --primary-hov: #0F766E;
+    --primary-lit: #F0FDFA;
+    --accent: #6366F1;
+    --bg: #F6FBF9;
     --card: #FFFFFF;
     --border: #E2E8F0;
     --text: #1E293B;
@@ -37,12 +37,8 @@ window.jsBeautify = jsBeautify;
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: 'Inter', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
-    /* 纯色底 + 细网格装饰：两层 linear-gradient 叠出方格，对比度极低，不抢内容 */
+    /* 纯色底，无网格 */
     background-color: var(--bg);
-    background-image:
-      linear-gradient(to right, rgba(148, 163, 184, 0.18) 1px, transparent 1px),
-      linear-gradient(to bottom, rgba(148, 163, 184, 0.18) 1px, transparent 1px);
-    background-size: 28px 28px;
     color: var(--text); min-height: 100vh;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -54,7 +50,7 @@ window.jsBeautify = jsBeautify;
     cursor: pointer; text-align: center; transition: all 150ms ease; background: #FFFFFF;
   }
   .mode-card:hover { border-color: var(--primary); }
-  .mode-card.active { border-color: var(--primary); background: var(--primary-lit); box-shadow: 0 0 0 3px rgba(37,99,235,0.12); }
+  .mode-card.active { border-color: var(--primary); background: var(--primary-lit); box-shadow: 0 0 0 3px rgba(13,148,136,0.12); }
   .mode-card .mode-title { font-size: 14px; font-weight: 600; color: var(--text); }
   .mode-card .mode-desc { font-size: 12px; color: var(--text-sec); margin-top: 4px; line-height: 1.4; }
   .mode-hint { font-size: 12px; color: var(--text-sec); margin-bottom: 16px; line-height: 1.5; }
@@ -67,7 +63,7 @@ window.jsBeautify = jsBeautify;
     border: 2px solid #CBD5E1; color: #94A3B8;
     background: var(--card); transition: all 200ms ease;
   }
-  .step-dot.active { border-color: var(--primary); background: var(--primary); color: #FFFFFF; box-shadow: 0 2px 8px rgba(37,99,235,0.3); }
+  .step-dot.active { border-color: var(--primary); background: var(--primary); color: #FFFFFF; box-shadow: 0 2px 8px rgba(13,148,136,0.3); }
   .step-dot.done { border-color: var(--success); background: var(--success); color: transparent; font-size: 0; }
   .step-dot.done::before { content: '\2713'; font-size: 14px; font-weight: 700; color: #FFFFFF; }
   .step-label { font-size: 12px; color: var(--text-sec); font-weight: 500; white-space: nowrap; }
@@ -104,7 +100,7 @@ window.jsBeautify = jsBeautify;
     padding: 10px 14px; border-radius: 8px; font-size: 14px; font-family: inherit;
     width: 100%; outline: none; transition: border-color 150ms ease, box-shadow 150ms ease;
   }
-  input:focus, select:focus, textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+  input:focus, select:focus, textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(13,148,136,0.1); }
   input.error { border-color: var(--error); background: var(--error-bg); }
   input::placeholder, textarea::placeholder { color: #94A3B8; }
   /* ===== Sliders ===== */
@@ -142,12 +138,12 @@ window.jsBeautify = jsBeautify;
   /* ===== Flow Dot ===== */
   #flowDot {
     fill: var(--primary);
-    filter: drop-shadow(0 0 6px rgba(37,99,235,0.8));
+    filter: drop-shadow(0 0 6px rgba(13,148,136,0.8));
     transition: transform 600ms cubic-bezier(0.45, 0, 0.55, 1);
   }
   @keyframes flowDotPulse {
-    0%, 100% { filter: drop-shadow(0 0 2px rgba(37,99,235,0.2)); }
-    50% { filter: drop-shadow(0 0 12px rgba(37,99,235,0.6)); }
+    0%, 100% { filter: drop-shadow(0 0 2px rgba(13,148,136,0.2)); }
+    50% { filter: drop-shadow(0 0 12px rgba(13,148,136,0.6)); }
   }
   /* ===== Progress Stripes ===== */
   #progressBar {
@@ -186,11 +182,11 @@ window.jsBeautify = jsBeautify;
   .render-preview ul, .render-preview ol { padding-left: 24px; margin: 8px 0; }
   .render-preview li { line-height: 1.6; }
   .render-preview code { background: #F1F5F9; padding: 2px 6px; border-radius: 4px; font-size: 13px; font-family: 'SF Mono', 'Consolas', 'Liberation Mono', monospace; }
-  .render-preview pre { background: #F8FAFC; padding: 16px; border-radius: 8px; overflow-x: auto; border: 1px solid var(--border); }
+  .render-preview pre { background: #F6FBF9; padding: 16px; border-radius: 8px; overflow-x: auto; border: 1px solid var(--border); }
   .render-preview pre code { background: none; padding: 0; }
   .render-preview table { border-collapse: collapse; width: 100%; margin: 12px 0; }
   .render-preview th, .render-preview td { border: 1px solid var(--border); padding: 10px 12px; text-align: left; }
-  .render-preview th { background: #F8FAFC; font-weight: 600; }
+  .render-preview th { background: #F6FBF9; font-weight: 600; }
   .render-preview img { max-width: 100%; border-radius: 6px; }
   .render-preview a { color: var(--primary); text-decoration: none; }
   .render-preview a:hover { text-decoration: underline; }
@@ -226,10 +222,10 @@ window.jsBeautify = jsBeautify;
   .tree-children.collapsed { max-height: 0 !important; }
   .tree-leaf { display: flex; align-items: center; gap: 6px; padding: 6px 12px 6px 32px; cursor: pointer; font-size: 13px; border-radius: 4px; transition: background 150ms ease; }
   .tree-leaf:hover { background: var(--primary-lit); }
-  .tree-leaf.active { background: rgba(37,99,235,0.08); color: var(--primary); font-weight: 500; }
+  .tree-leaf.active { background: rgba(13,148,136,0.08); color: var(--primary); font-weight: 500; }
   .tree-leaf .tree-icon { flex-shrink: 0; font-size: 11px; width: 16px; text-align: center; }
   .tree-leaf .tree-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .tree-leaf .tree-depth-tag { flex-shrink: 0; font-size: 10px; color: var(--text-sec); background: #F8FAFC; padding: 1px 6px; border-radius: 8px; margin-left: auto; }
+  .tree-leaf .tree-depth-tag { flex-shrink: 0; font-size: 10px; color: var(--text-sec); background: #F6FBF9; padding: 1px 6px; border-radius: 8px; margin-left: auto; }
   /* ===== Resizable Split ===== */
   .split-divider { width: 6px; cursor: col-resize; background: transparent; flex-shrink: 0; position: relative; transition: background 150ms ease; border-radius: 3px; }
   .split-divider:hover, .split-divider.dragging { background: var(--primary-lit); }
@@ -253,15 +249,15 @@ window.jsBeautify = jsBeautify;
 <!-- ===== HEADER ===== -->
 <header style="display:flex;justify-content:space-between;align-items:center;padding:0 24px;height:56px;background:#FFFFFF;border-bottom:1px solid var(--border);">
   <div style="display:flex;align-items:center;gap:10px;">
-    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#0D9488" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <circle cx="12" cy="12" r="10"/>
       <ellipse cx="12" cy="12" rx="4" ry="10"/>
       <path d="M2 12h20"/>
     </svg>
-    <span style="font-size:17px;font-weight:600;color:var(--text);">智慧企业数据获取平台</span>
+    <span style="font-size:17px;font-weight:600;color:var(--text);">langgraph-multi-agent-crawler</span>
   </div>
   <div style="display:flex;align-items:center;gap:12px;">
-    <input id="tokenInput" type="text" placeholder="API Token" style="width:220px;font-size:13px;padding:7px 12px;border-radius:6px;border:1px solid var(--border);background:#F8FAFC;color:var(--text);outline:none;transition:border-color 150ms ease;"
+    <input id="tokenInput" type="text" placeholder="API Token" style="width:220px;font-size:13px;padding:7px 12px;border-radius:6px;border:1px solid var(--border);background:#F6FBF9;color:var(--text);outline:none;transition:border-color 150ms ease;"
            onchange="saveToken()" />
     <button class="btn btn-secondary" style="padding:7px 14px;font-size:13px;" onclick="openKeyMgmt()">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:4px;"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
@@ -283,68 +279,42 @@ window.jsBeautify = jsBeautify;
   <div class="step-line" id="stepLine1"></div>
   <div class="step-item">
     <div class="step-dot" id="stepDot2">2</div>
-    <div class="step-label">配置参数</div>
+    <div class="step-label">爬取执行</div>
   </div>
   <div class="step-line" id="stepLine2"></div>
   <div class="step-item">
     <div class="step-dot" id="stepDot3">3</div>
-    <div class="step-label">爬取执行</div>
-  </div>
-  <div class="step-line" id="stepLine3"></div>
-  <div class="step-item">
-    <div class="step-dot" id="stepDot4">4</div>
     <div class="step-label">查看结果</div>
   </div>
 </div>
 
 <!-- ===== STEP 1: URL INPUT ===== -->
 <div class="wizard-panel active" id="panel1">
-  <div style="max-width:600px;margin:60px auto;text-align:center;">
+  <div style="max-width:600px;margin:40px auto;text-align:center;">
     <h2 class="panel-title">输入目标网站</h2>
-    <p class="panel-subtitle">输入网址，系统将自动爬取整站内容并生成结构化 HTML 文档</p>
+    <p class="panel-subtitle">输入网址，或导入 .txt 批量网址（每行一个），系统将逐个爬取整站内容并生成结构化 HTML 文档</p>
     <input type="text" id="urlInput" placeholder="请输入目标网站地址，例如 https://www.example.com"
            style="font-size:16px;text-align:center;" onkeydown="if(event.key==='Enter')goStep2()" oninput="validateUrl()" />
     <p id="urlError" style="color:var(--error);font-size:13px;margin-top:8px;display:none;">请输入有效的网址（以 http:// 或 https:// 开头）</p>
     <div id="urlSuggestions" style="margin-top:12px;display:none;"></div>
+    <div style="margin-top:16px;display:flex;justify-content:center;align-items:center;gap:12px;">
+      <button type="button" class="btn btn-secondary" style="font-size:13px;" onclick="document.getElementById('txtFile').click()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        导入网址 .txt
+      </button>
+      <input type="file" id="txtFile" accept=".txt,text/plain" style="display:none;" onchange="importTxtFile()" />
+      <span id="txtImportHint" style="font-size:12px;color:var(--text-light);">支持批量导入，每行一个网址</span>
+    </div>
+    <div id="urlListBox" style="display:none;margin-top:16px;text-align:left;"></div>
     <button class="btn btn-primary" id="btnStep1" style="margin-top:24px;font-size:16px;padding:12px 32px;" disabled onclick="goStep2()">
-      下一步
+      开始爬取
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
     </button>
   </div>
 </div>
 
-<!-- ===== STEP 2: CONFIGURATION ===== -->
+<!-- ===== STEP 2: EXECUTION ===== -->
 <div class="wizard-panel" id="panel2">
-  <div class="card" style="max-width:700px;margin:0 auto;">
-    <h3>站点类型</h3>
-    <div id="siteModeConfig"></div>
-    <h3 style="margin:24px 0 16px;">爬取参数</h3>
-    <div id="paramSliders"></div>
-    <h3 style="margin:24px 0 16px;">选项</h3>
-    <div id="toggleOptions"></div>
-    <h3 style="margin:24px 0 16px;">LLM 智能策略</h3>
-    <div id="llmConfig"></div>
-    <h3 style="margin:24px 0 16px;">数据清洗</h3>
-    <div id="cleanConfig"></div>
-    <details>
-      <summary>高级设置</summary>
-      <div style="margin-top:12px;display:flex;flex-direction:column;gap:12px;" id="advancedConfig"></div>
-    </details>
-    <div style="display:flex;justify-content:space-between;margin-top:24px;">
-      <button class="btn btn-secondary" onclick="goStep1()">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
-        上一步
-      </button>
-      <button class="btn btn-primary" onclick="goStep3()">
-        开始爬取
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-      </button>
-    </div>
-  </div>
-</div>
-
-<!-- ===== STEP 3: EXECUTION ===== -->
-<div class="wizard-panel" id="panel3">
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
     <!-- Left: Status -->
     <div class="card">
@@ -359,7 +329,10 @@ window.jsBeautify = jsBeautify;
       </div>
       <p id="depthInfo" style="font-size:13px;color:var(--text-sec);margin-bottom:12px;"></p>
       <div id="logContainer" style="max-height:300px;overflow-y:auto;font-family:'SF Mono','Consolas','Liberation Mono',monospace;font-size:13px;"></div>
-      <button class="btn btn-danger" style="margin-top:12px;display:none;" id="btnStop" onclick="stopCrawl()">停止</button>
+      <div style="margin-top:12px;display:flex;gap:8px;">
+        <button class="btn btn-secondary" onclick="prevStep()">上一步</button>
+        <button class="btn btn-danger" style="display:none;" id="btnStop" onclick="stopCrawl()">停止</button>
+      </div>
     </div>
     <!-- Right: DAG -->
     <div class="card">
@@ -371,8 +344,14 @@ window.jsBeautify = jsBeautify;
   </div>
 </div>
 
-<!-- ===== STEP 4: RESULTS ===== -->
-<div class="wizard-panel" id="panel4">
+<!-- ===== STEP 3: RESULTS ===== -->
+<div class="wizard-panel" id="panel3">
+  <div class="card" id="siteBar" style="display:none;margin-bottom:16px;padding:12px 16px;">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <span style="font-size:13px;color:var(--text-sec);white-space:nowrap;font-weight:600;">爬取站点</span>
+      <div id="siteChips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+    </div>
+  </div>
   <div id="splitContainer" style="display:flex;height:70vh;gap:0;">
     <!-- Left: Page List -->
     <div id="sidebarPanel" class="card" style="width:280px;min-width:180px;max-width:600px;overflow-y:auto;padding:20px;flex-shrink:0;">
@@ -442,6 +421,7 @@ window.jsBeautify = jsBeautify;
       <button class="btn btn-primary" onclick="exportCsv()">导出 content_001 CSV</button>
       <button class="btn btn-accent" onclick="importToDb(event)">一键导入数据库</button>
       <button class="btn btn-secondary" onclick="downloadSummary()">下载统计报告 .json</button>
+      <button class="btn btn-secondary" onclick="prevStep()">上一步</button>
       <button class="btn btn-secondary" onclick="startNew()">开始新任务</button>
     </div>
   </div>
@@ -494,23 +474,6 @@ function statusIcon(ok) { return iconSvg(ok ? 'check' : 'x'); }
 function verdictIcon(pass) { return iconSvg(pass ? 'check-circle' : 'alert-triangle'); }
 
 // ==================== STATE ====================
-const PARAMS = [
-  {key:'max_depth', label:'爬取深度', def:3, min:1, max:10, step:1},
-  {key:'max_pages', label:'最大页数', def:50, min:5, max:500, step:5},
-  {key:'concurrent', label:'并发数', def:3, min:1, max:10, step:1},
-  {key:'delay', label:'请求间隔 (秒)', def:0.2, min:0, max:5, step:0.1},
-  {key:'timeout', label:'页面超时 (秒)', def:60, min:10, max:300, step:10},
-];
-const TOGGLES = [
-  {key:'use_cache', label:'启用缓存', def:true, tip:''},
-  {key:'same_domain', label:'仅爬取同域名', def:false, tip:'推荐开启'},
-  {key:'exclude_external', label:'排除外部链接', def:false, tip:''},
-];
-const SITE_MODES = [
-  {key:'auto', label:'自动识别', desc:'由探测与 LLM 智能判断'},
-  {key:'static', label:'静态官网', desc:'内容在源码中，快而稳'},
-  {key:'dynamic', label:'动态官网', desc:'JS 渲染/懒加载，等渲染后抓取'},
-];
 // ==================== LLM 供应商注册表 ====================
 // 唯一数据源是服务端 GET /llm/providers（内置 3 家 + 配置中心注册的自定义
 // OpenAI 兼容供应商）。这里只保留离线兜底默认值，运行时被服务端数据覆盖。
@@ -526,7 +489,7 @@ let LLM_ACTIVE = {provider:'zhipu', model:'', valid:true};   // 服务端持久�
 function getProviderInfo(pid) { return LLM_PROVIDERS.find(p => p.id === pid); }
 
 let WizardState = loadWizardState();
-let history = loadHistory();
+let historyCache = [];   // 历史记录（服务端 SQLite，GET /history 拉取）
 let currentStep = WizardState.currentStep || 1;
 let currentPageMd = {};
 let currentEditPath = null;
@@ -535,6 +498,7 @@ let rawEditor = null;
 let editSourceUrl = null;   // cmEditor 当前对应哪一页（防渲染同步串页）
 let previewContent = '';   // 当前预览内容（任意 tab 兜底取用）
 let abortController = null;
+let crawlRunning = false;  // 爬取是否进行中（上一步需先停止再返回）
 let dagNodeStates = {probe:'waiting', derive:'waiting', crawl:'waiting', validate:'waiting', clean:'waiting', finalize:'waiting'};
 let currentPageMdCleaned = {};   // url -> cleaned md 缓存
 let currentCleanMode = 'raw';    // 'raw' | 'cleaned'
@@ -550,13 +514,6 @@ function saveWizardState() {
   WizardState.currentStep = currentStep;
   try { sessionStorage.setItem('c4ai_wizard_state', JSON.stringify(WizardState)); } catch(e) {}
 }
-function loadHistory() {
-  try { let d = localStorage.getItem('c4ai_history'); return d ? JSON.parse(d) : []; }
-  catch(e) { return []; }
-}
-function saveHistory() {
-  try { localStorage.setItem('c4ai_history', JSON.stringify(history)); } catch(e) {}
-}
 
 // ==================== TOKEN ====================
 function getToken() { return document.getElementById('tokenInput').value || sessionStorage.getItem('c4ai_token') || ''; }
@@ -570,12 +527,12 @@ function showStep(n) {
   currentStep = n;
   document.querySelectorAll('.wizard-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('panel'+n).classList.add('active');
-  for (let i=1;i<=4;i++) {
+  for (let i=1;i<=3;i++) {
     let dot = document.getElementById('stepDot'+i);
     dot.classList.remove('active','done');
     if (i < n) dot.classList.add('done');
     if (i === n) dot.classList.add('active');
-    if (i < 4) {
+    if (i < 3) {
       let line = document.getElementById('stepLine'+i);
       line.classList.toggle('done', i < n);
     }
@@ -586,266 +543,123 @@ function showStep(n) {
 function goStep1() {
   let url = document.getElementById('urlInput').value.trim();
   if (url) WizardState.url = url;
+  // 上一步回填：优先还原上次爬取的网址集合——首个回填输入框，其余还原到 txt 导入列表
+  let saved = (WizardState.urls && WizardState.urls.length) ? WizardState.urls : [];
+  let inputVal = WizardState.url || '';
+  if (saved.length > 1) {
+    inputVal = saved[0];
+    urlList = saved.slice(1);
+  } else {
+    urlList = [];
+  }
   showStep(1);
-  document.getElementById('urlInput').value = WizardState.url || '';
+  document.getElementById('urlInput').value = inputVal;
   validateUrl();
 }
 
-function goStep2() {
-  let url = document.getElementById('urlInput').value.trim();
-  if (!url || !url.startsWith('http')) return;
-  WizardState.url = url;
-  saveWizardState();
-  showStep(2);
+// 上一步（Step2/Step3）：返回 Step1 填写网址；爬取进行中先停止（SSE 断连后端任务终止）
+function prevStep() {
+  if (crawlRunning) {
+    stopCrawl();
+    addLog('⏹ 已停止爬取，返回填写网址', 'info');
+  }
+  goStep1();
 }
 
-function goStep3() {
-  collectConfig();
+// 目标网址集合 = 输入框 + txt 导入列表（去重）
+function getTargetUrls() {
+  let raw = document.getElementById('urlInput').value.trim();
+  let all = raw ? [raw] : [];
+  (urlList || []).forEach(u => all.push(u));
+  let seen = new Set(); let out = [];
+  for (let u of all) {
+    let k = u.replace(/\/+$/, '');
+    if (!seen.has(k)) { seen.add(k); out.push(u); }
+  }
+  return out;
+}
+
+function goStep2() {
+  let urls = getTargetUrls();
+  if (urls.length === 0) return;
+  WizardState.urls = urls;
+  WizardState.url = urls[0];
   saveWizardState();
-  showStep(3);
+  showStep(2);
   startCrawl();
 }
 
-function goStep4() {
-  showStep(4);
+function goStep3() {
+  showStep(3);
   loadResults();
+}
+
+// ==================== TXT 批量导入（对齐 GUI：逐行解析/去重/限 30 个） ====================
+let urlList = [];
+const MAX_SITES = 30;
+
+function importTxtFile() {
+  let f = document.getElementById('txtFile').files[0];
+  if (!f) return;
+  let reader = new FileReader();
+  reader.onload = function(e) {
+    let urls = [];
+    String(e.target.result || '').split(/\r?\n/).forEach(line => {
+      line = line.trim();
+      if (!line || line.startsWith('#')) return;
+      if (!line.startsWith('http://') && !line.startsWith('https://')) return;
+      urls.push(line);
+    });
+    let seen = new Set(); let unique = [];
+    for (let u of urls) {
+      let k = u.replace(/\/+$/, '');
+      if (!seen.has(k)) { seen.add(k); unique.push(u); }
+    }
+    if (unique.length > MAX_SITES) unique = unique.slice(0, MAX_SITES);
+    urlList = unique;
+    // 导入后清空输入框，避免混用
+    document.getElementById('urlInput').value = '';
+    document.getElementById('urlSuggestions').innerHTML = '';
+    validateUrl();
+  };
+  reader.readAsText(f, 'utf-8');
+  document.getElementById('txtFile').value = '';
+}
+
+function renderUrlList() {
+  let box = document.getElementById('urlListBox');
+  if (!box) return;
+  if (!urlList || urlList.length === 0) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  box.style.display = 'block';
+  box.innerHTML = `<div style="font-size:12px;color:var(--text-sec);margin-bottom:8px;">已导入 ${urlList.length} 个网址（点击 ✕ 移除）：</div>` +
+    urlList.map((u, i) => `
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-bottom:6px;font-size:13px;">
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;" title="${esc(u)}">${esc(u)}</span>
+        <button type="button" onclick="removeUrl(${i})" style="border:none;background:none;color:var(--danger);cursor:pointer;font-size:15px;flex-shrink:0;" title="移除">✕</button>
+      </div>`).join('');
+}
+
+function removeUrl(i) {
+  urlList.splice(i, 1);
+  validateUrl();
 }
 
 // ==================== URL VALIDATION ====================
 function validateUrl() {
+  let ok = getTargetUrls().length > 0;
+  document.getElementById('btnStep1').disabled = !ok;
   let url = document.getElementById('urlInput').value.trim();
   let valid = url.startsWith('http://') || url.startsWith('https://');
-  document.getElementById('btnStep1').disabled = !valid;
   document.getElementById('urlError').style.display = (url && !valid) ? 'block' : 'none';
   document.getElementById('urlInput').classList.toggle('error', url.length > 0 && !valid);
+  renderUrlList();
 }
 
-// ==================== CONFIG UI ====================
-function renderModeCards() {
-  let mode = WizardState.site_mode || 'auto';
-  document.getElementById('siteModeConfig').innerHTML = `
-    <div class="mode-grid">
-      ${SITE_MODES.map(m => `
-        <div class="mode-card ${m.key===mode?'active':''}" onclick="onModeSelect('${m.key}')">
-          <div class="mode-title">${m.label}</div>
-          <div class="mode-desc">${m.desc}</div>
-        </div>`).join('')}
-    </div>
-    <div class="mode-hint" id="modeHint">${modeHintText(mode)}</div>`;
-}
-
-function modeHintText(mode) {
-  if (mode === 'static') return '静态官网：自动缩短页面超时、提高并发，并禁用 JS 交互步骤（scroll/click），适合内容直接写在 HTML 源码中的站点。';
-  if (mode === 'dynamic') return '动态官网：自动拉长页面超时、降低并发，开启全页滚动扫描以触发懒加载/无限滚动内容，适合 React/Vue 等 JS 渲染站点。';
-  return '自动识别：不做预设，由探测节点和 LLM 共同决定最优参数。';
-}
-
-function onModeSelect(mode) {
-  WizardState.site_mode = mode;
-  // 智能联动调参：让滑杆默认值与会话模式匹配（后端仍有护栏兜底）
-  if (mode === 'static') { setParam('timeout', 30); setParam('concurrent', 5); }
-  else if (mode === 'dynamic') { setParam('timeout', 90); setParam('concurrent', 3); }
-  renderModeCards();
-  saveWizardState();
-}
-
-function setParam(key, val) {
-  WizardState[key] = val;
-  let slider = document.getElementById('slider_'+key);
-  let num = document.getElementById('num_'+key);
-  let label = document.getElementById('val_'+key);
-  if (slider) slider.value = val;
-  if (num) num.value = val;
-  if (label) label.textContent = val;
-}
-
-// 与后端 build_run_config 的护栏规则保持一致
-function applyModeClamps() {
-  let mode = WizardState.site_mode || 'auto';
-  if (mode === 'static') {
-    if (WizardState.timeout > 30) setParam('timeout', 30);
-    if (WizardState.concurrent < 5) setParam('concurrent', 5);
-  } else if (mode === 'dynamic') {
-    if (WizardState.timeout < 90) setParam('timeout', 90);
-    if (WizardState.concurrent > 4) setParam('concurrent', 4);
-  }
-}
-
-function buildConfigUI() {
-  // 站点类型模式
-  renderModeCards();
-
-  // Params
-  let slidersHtml = '';
-  PARAMS.forEach(p => {
-    let v = WizardState[p.key] !== undefined ? WizardState[p.key] : p.def;
-    slidersHtml += `<div style="margin-bottom:12px;">
-      <div style="display:flex;justify-content:space-between;font-size:13px;">
-        <span>${p.label}</span><span id="val_${p.key}">${v}</span>
-      </div>
-      <div style="display:flex;gap:12px;align-items:center;">
-        <input type="range" class="slider" id="slider_${p.key}" min="${p.min}" max="${p.max}" step="${p.step}" value="${v}"
-               oninput="syncSlider('${p.key}')" />
-        <input type="number" id="num_${p.key}" value="${v}" min="${p.min}" max="${p.max}" step="${p.step}"
-               style="width:80px;text-align:center;" onchange="syncNum('${p.key}')" />
-      </div>
-    </div>`;
-  });
-  document.getElementById('paramSliders').innerHTML = slidersHtml;
-
-  // Toggles
-  let togglesHtml = '';
-  TOGGLES.forEach(t => {
-    let v = WizardState[t.key] !== undefined ? WizardState[t.key] : t.def;
-    togglesHtml += `<label style="display:flex;align-items:center;gap:12px;margin-bottom:12px;cursor:pointer;">
-      <span style="font-size:13px;">${t.label}</span>
-      ${t.tip ? `<span style="font-size:11px;color:var(--warning);">${t.tip}</span>` : ''}
-      <span class="toggle-switch"><input type="checkbox" id="toggle_${t.key}" ${v?'checked':''} onchange="WizardState['${t.key}']=this.checked;saveWizardState();" /><span class="toggle-slider"></span></span>
-    </label>`;
-  });
-  document.getElementById('toggleOptions').innerHTML = togglesHtml;
-
-  // LLM
-  let useLlm = WizardState.use_llm !== undefined ? WizardState.use_llm : true;
-  let provider = WizardState.provider || 'zhipu';
-  let model = WizardState.model || '';
-  let pInfo = getProviderInfo(provider) || LLM_PROVIDERS[0];
-  provider = pInfo.id;   // 注册表里已删除的 provider 回退到第一个
-  document.getElementById('llmConfig').innerHTML = `
-    <label style="display:flex;align-items:center;gap:12px;margin-bottom:12px;cursor:pointer;">
-      <span style="font-size:13px;">启用 LLM 智能策略</span>
-      <span class="toggle-switch"><input type="checkbox" id="toggle_llm" ${useLlm?'checked':''} onchange="WizardState.use_llm=this.checked;saveWizardState();toggleLlmFields()" /><span class="toggle-slider"></span></span>
-    </label>
-    <div id="llmFields" style="display:${useLlm?'flex':'none'};gap:12px;flex-wrap:wrap;align-items:center;">
-      <select id="selProvider" onchange="onProviderChange()" style="flex:1;min-width:120px;">
-        ${LLM_PROVIDERS.map(p => `<option value="${_esc(p.id)}" ${p.id===provider?'selected':''}>${_esc(p.label || p.id)}${p.builtin?'':'（自定义）'}</option>`).join('')}
-      </select>
-      <input list="llmModelList" id="selModel" value="${_esc(model)}" placeholder="模型名（可自由输入）"
-             onchange="onModelChange()" style="flex:1;min-width:140px;" />
-      <datalist id="llmModelList">
-        ${(pInfo.models||[]).map(m => `<option value="${_esc(m)}"></option>`).join('')}
-      </datalist>
-      <span id="llmKeyStatus" style="font-size:12px;white-space:nowrap;"></span>
-      <button class="btn btn-sm btn-secondary" onclick="openKeyMgmt()">配置中心</button>
-    </div>`;
-
-  // Advanced
-  document.getElementById('advancedConfig').innerHTML = `
-    <div style="display:flex;gap:12px;align-items:center;">
-      <span style="font-size:13px;white-space:nowrap;">输出目录:</span>
-      <input type="text" id="advOutput" value="${WizardState.output||'crawl_output'}" onchange="WizardState.output=this.value;saveWizardState();" />
-    </div>`;
-
-  // 数据清洗配置
-  let enableCleaning = WizardState.enable_cleaning !== undefined ? WizardState.enable_cleaning : true;
-  let cleaningMode = WizardState.cleaning_mode || 'standard';
-  let keepImages = WizardState.keep_images !== undefined ? WizardState.keep_images : true;
-  let cleaningBatchSize = WizardState.cleaning_batch_size ?? 20;
-  let cleanDiv = document.getElementById('cleanConfig');
-  if (cleanDiv) {
-    cleanDiv.innerHTML = `
-      <label style="display:flex;align-items:center;gap:12px;margin-bottom:12px;cursor:pointer;">
-        <span style="font-size:13px;">启用 LLM 数据清洗</span>
-        <span class="toggle-switch"><input type="checkbox" id="toggle_cleaning" ${enableCleaning?'checked':''} onchange="WizardState.enable_cleaning=this.checked;saveWizardState();toggleCleaningFields();" /><span class="toggle-slider"></span></span>
-      </label>
-      <div style="display:${enableCleaning?'flex':'none'};gap:12px;align-items:center;margin-bottom:12px;" id="cleaningModeRow">
-        <span style="font-size:13px;white-space:nowrap;">清洗模式:</span>
-        <select id="selCleaningMode" onchange="WizardState.cleaning_mode=this.value;saveWizardState();" style="flex:1;">
-          <option value="conservative" ${cleaningMode==='conservative'?'selected':''}>保守（仅删导航/页脚）</option>
-          <option value="standard" ${cleaningMode==='standard'?'selected':''}>标准（删联系方式+链接）</option>
-          <option value="aggressive" ${cleaningMode==='aggressive'?'selected':''}>激进（仅提取核心正文）</option>
-        </select>
-      </div>
-      <div id="batchSizeRow" style="display:${enableCleaning?'flex':'none'};gap:12px;align-items:center;margin-bottom:12px;">
-        <span style="font-size:13px;white-space:nowrap;">清洗并发数:</span>
-        <input type="number" id="num_cleaning_batch_size" min="1" step="1" value="${cleaningBatchSize}" onchange="onCleaningBatchChange(this.value)" style="width:80px;" />
-        <span style="font-size:11px;color:var(--text-sec);">（智谱 GLM 系列不限并发，仅限 QPS；建议 20 起步，按本地资源上调）</span>
-      </div>
-      <label id="keepImagesRow" style="display:${enableCleaning?'flex':'none'};align-items:center;gap:12px;cursor:pointer;">
-        <span style="font-size:13px;">保留相关图片</span>
-        <span style="font-size:11px;color:var(--text-sec);">（LLM 判断图片与内容的相关性）</span>
-        <span class="toggle-switch"><input type="checkbox" id="toggle_keep_images" ${keepImages?'checked':''} onchange="WizardState.keep_images=this.checked;saveWizardState();" /><span class="toggle-slider"></span></span>
-      </label>`;
-  }
-
-  // 初始化：拉取服务端持久化的 provider/model 配置，并刷新 key 状态
-  loadLlmServerConfig();
-  loadLlmKeyStatus();
-}
-
-function onCleaningBatchChange(v) {
-  let n = parseInt(v);
-  if (!Number.isFinite(n) || n < 1) n = 1;
-  WizardState.cleaning_batch_size = n;
-  saveWizardState();
-  let el = document.getElementById('num_cleaning_batch_size');
-  if (el) el.value = n;
-}
-
-function syncSlider(key) {
-  let v = parseFloat(document.getElementById('slider_'+key).value);
-  document.getElementById('num_'+key).value = v;
-  document.getElementById('val_'+key).textContent = v;
-  WizardState[key] = v;
-  saveWizardState();
-}
-
-function syncNum(key) {
-  let v = parseFloat(document.getElementById('num_'+key).value);
-  let slider = document.getElementById('slider_'+key);
-  if (v < parseFloat(slider.min)) v = parseFloat(slider.min);
-  if (v > parseFloat(slider.max)) v = parseFloat(slider.max);
-  slider.value = v;
-  document.getElementById('val_'+key).textContent = v;
-  WizardState[key] = v;
-  saveWizardState();
-}
-
-function toggleLlmFields() {
-  document.getElementById('llmFields').style.display = WizardState.use_llm ? 'flex' : 'none';
-}
-
-function toggleCleaningFields() {
-  let enabled = WizardState.enable_cleaning;
-  let modeRow = document.getElementById('cleaningModeRow');
-  let imagesRow = document.getElementById('keepImagesRow');
-  let batchRow = document.getElementById('batchSizeRow');
-  if (modeRow) modeRow.style.display = enabled ? 'flex' : 'none';
-  if (imagesRow) imagesRow.style.display = enabled ? 'flex' : 'none';
-  if (batchRow) batchRow.style.display = enabled ? 'flex' : 'none';
-}
-
-function onProviderChange() {
-  let p = document.getElementById('selProvider').value;
-  WizardState.provider = p;
-  // provider 变了，环境变量名从注册表取（内置->ZHIPU_API_KEY 等，自定义->LLMKEY_*）
-  let info = getProviderInfo(p);
-  WizardState.api_key_env = (info && info.api_key_env) || '';
-  // 更新模型建议列表；当前模型不在新供应商建议里时切到首个建议
-  let sel = document.getElementById('selModel');
-  if (sel) {
-    let models = (info && info.models) || [];
-    let dl = document.getElementById('llmModelList');
-    if (dl) dl.innerHTML = models.map(m => `<option value="${_esc(m)}"></option>`).join('');
-    if (models.length && !models.includes(sel.value)) sel.value = models[0];
-    WizardState.model = sel.value;
-  }
-  saveWizardState();
-  saveLlmServerConfig();
-  loadLlmKeyStatus();
-}
-
-// 模型切换（自由输入框）：持久化到服务端
-function onModelChange() {
-  let sel = document.getElementById('selModel');
-  if (!sel) return;
-  WizardState.model = sel.value.trim();
-  saveWizardState();
-  saveLlmServerConfig();
-}
-
-// ==================== LLM KEY 状态 + 持久化配置 ====================
-// 拉取服务端统一注册表（内置+自定义供应商），同步下拉与状态点
+// ==================== LLM 配置中心 ====================
+// 统一入口：页头「配置中心」弹窗。数据源为 GET /llm/providers（内置 3 家 +
+// 配置中心注册的自定义 OpenAI 兼容供应商），保存写 config.json + /llm/config，
+// 服务端 _sync_llm_config 三同步（env + config 模块属性 + reset_llm）后真正生效。
+// 拉取服务端统一注册表（内置+自定义供应商），配置中心弹窗用
 async function loadLlmProviders() {
   let token = getToken();
   try {
@@ -860,141 +674,52 @@ async function loadLlmProviders() {
   } catch (e) { return null; }
 }
 
-// 当前 provider 的「已配置/未配置」状态点（数据来自 /llm/providers）
-function loadLlmKeyStatus() {
-  let provider = WizardState.provider || (document.getElementById('selProvider')?.value) || 'zhipu';
-  let statusEl = document.getElementById('llmKeyStatus');
-  if (!statusEl) return;
-  let info = getProviderInfo(provider);
-  let token = getToken();
-  statusEl.innerHTML = '<span style="color:var(--text-light);">加载中...</span>';
-  fetch('/llm/providers', { headers: token ? {'Authorization':'Bearer '+token} : {} })
-    .then(r => r.ok ? r.json() : Promise.reject('加载失败'))
-    .then(d => {
-      let row = (d.providers || []).find(p => p.id === provider);
-      if (!row) {
-        statusEl.innerHTML = '<span style="color:var(--warning);">○ 未知供应商</span>';
-        return;
-      }
-      if (row.has_key) {
-        statusEl.innerHTML = '<span style="color:var(--success);">● Key 已配置</span>';
-      } else {
-        statusEl.innerHTML = '<span style="color:var(--warning);">○ 未配置 Key（点「配置中心」）</span>';
-      }
-    })
-    .catch(() => { statusEl.innerHTML = '<span style="color:var(--text-light);">○ 状态未知</span>'; });
-}
-
-// 从服务端拉取持久化的 provider/model（配置一次，跨会话/浏览器生效）
-async function loadLlmServerConfig() {
-  await loadLlmProviders();
-  // 服务端 active 与本地不同步时以服务端为准（配置中心保存过即全局生效）
-  if (LLM_ACTIVE.provider && getProviderInfo(LLM_ACTIVE.provider)) {
-    WizardState.provider = LLM_ACTIVE.provider;
-    if (LLM_ACTIVE.model) WizardState.model = LLM_ACTIVE.model;
-  } else if (WizardState.provider && !getProviderInfo(WizardState.provider)) {
-    // 本地存的 provider 已被删除，回退默认
-    WizardState.provider = LLM_PROVIDERS[0].id;
-    WizardState.model = '';
-  }
-  let info = getProviderInfo(WizardState.provider);
-  if (info) WizardState.api_key_env = info.api_key_env || '';
-  let selP = document.getElementById('selProvider');
-  let selM = document.getElementById('selModel');
-  if (selP) {
-    selP.innerHTML = LLM_PROVIDERS.map(p => `<option value="${_esc(p.id)}" ${p.id===WizardState.provider?'selected':''}>${_esc(p.label || p.id)}${p.builtin?'':'（自定义）'}</option>`).join('');
-  }
-  if (selM) {
-    selM.value = WizardState.model || '';
-    let dl = document.getElementById('llmModelList');
-    if (dl) dl.innerHTML = ((info && info.models) || []).map(m => `<option value="${_esc(m)}"></option>`).join('');
-  }
-  saveWizardState();
-  loadLlmKeyStatus();
-}
-
-// 把当前 provider/model 持久化到服务端
-async function saveLlmServerConfig() {
-  let token = getToken();
-  let provider = WizardState.provider || 'zhipu';
-  let model = WizardState.model || '';
-  try {
-    await fetch('/llm/config', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json', ...(token ? {'Authorization':'Bearer '+token} : {})},
-      body: JSON.stringify({ active_provider: provider, active_model: model }),
-    });
-  } catch (e) { /* 保存失败不阻塞 */ }
-}
-
-function collectConfig() {
-  PARAMS.forEach(p => {
-    WizardState[p.key] = parseFloat(document.getElementById('slider_'+p.key)?.value) || p.def;
-  });
-  // 站点模式护栏：与后端 build_run_config 保持一致，避免滑杆显示与实际执行值不符
-  applyModeClamps();
-  WizardState.output = document.getElementById('advOutput')?.value || 'crawl_output';
-  // api_key_env 由 provider 从注册表自动决定（内置/自定义），不让用户手填
-  let _p = WizardState.provider || document.getElementById('selProvider')?.value || 'zhipu';
-  let _info = getProviderInfo(_p);
-  WizardState.api_key_env = (_info && _info.api_key_env) || 'ZHIPU_API_KEY';
-  // 模型为自由输入框，读一次最新值
-  let _mEl = document.getElementById('selModel');
-  if (_mEl && _mEl.value.trim()) WizardState.model = _mEl.value.trim();
-  if (WizardState.use_llm === undefined) WizardState.use_llm = true;
-  // 数据清洗配置
-  WizardState.enable_cleaning = document.getElementById('toggle_cleaning')?.checked ?? true;
-  WizardState.cleaning_mode = document.getElementById('selCleaningMode')?.value || 'standard';
-  WizardState.keep_images = document.getElementById('toggle_keep_images')?.checked ?? true;
-  let _bs = parseInt(document.getElementById('num_cleaning_batch_size')?.value);
-  WizardState.cleaning_batch_size = Number.isFinite(_bs) && _bs >= 1 ? _bs : 20;
-  saveWizardState();
-}
-
 // ==================== CRAWL EXECUTION ====================
 let pageResults = [];
 let crawlMetrics = null;
+let siteTotal = 0;          // 本次任务站点总数（来自 site_start 事件）
+let siteIndex = 0;          // 当前站点序号
+let currentSiteUrl = '';    // 当前站点 URL
+let sitePages = [];         // 当前站点页结果快照（每站历史记录用）
+let siteBaseIdx = 0;        // 当前站点页在 pageResults 中的起始下标（retry 时回滚）
 
 async function startCrawl() {
-  collectConfig();
   abortController = new AbortController();
+  crawlRunning = true;
   pageResults = [];
   crawlMetrics = null;
+  siteTotal = 0;
+  siteIndex = 0;
+  currentSiteUrl = '';
+  sitePages = [];
+  siteBaseIdx = 0;
   currentPageMdCleaned = {};
   cleanedDir = '';
   cleanStats = null;
   currentCleanMode = 'raw';
   dagNodeStates = {probe:'waiting', derive:'waiting', crawl:'waiting', validate:'waiting', clean:'waiting', finalize:'waiting'};
+  let siteBar = document.getElementById('siteBar');
+  if (siteBar) siteBar.style.display = 'none';
 
   document.getElementById('logContainer').innerHTML = '';
   document.getElementById('progressBar').style.width = '0%';
-  document.getElementById('pageCounter').textContent = '0/'+(WizardState.max_pages||50)+' 页';
+  document.getElementById('pageCounter').textContent = '0/50 页';
   document.getElementById('statusLabel').textContent = '连接中...';
   document.getElementById('depthInfo').textContent = '';
   document.getElementById('retryLabel').style.display = 'none';
   document.getElementById('nodeDetails').textContent = '';
   renderDag();
 
+  // 目标网址 = WizardState.urls（goStep2 已保存）或单 URL 兜底
+  let urls = (WizardState.urls && WizardState.urls.length) ? WizardState.urls.slice()
+           : (WizardState.url ? [WizardState.url] : []);
+  if (urls.length === 0) { alert('请先输入网址或导入 .txt 批量网址'); return; }
+  WizardState.url = urls[0];
+
   let token = getToken();
-  let body = {
-    url: WizardState.url,
-    provider: WizardState.provider || 'zhipu',
-    // 模型空时兜底：当前供应商的首个建议模型，最后才退 glm-4-flash
-    model: WizardState.model || ((getProviderInfo(WizardState.provider) || {}).models || [])[0] || 'glm-4-flash',
-    api_key_env: WizardState.api_key_env || 'ZHIPU_API_KEY',
-    max_depth: WizardState.max_depth || 3,
-    max_pages: WizardState.max_pages || 50,
-    concurrent: WizardState.concurrent || 3,
-    delay: WizardState.delay || 0.2,
-    timeout: WizardState.timeout || 60,
-    output: WizardState.output || 'crawl_output',
-    no_cache: !(WizardState.use_cache ?? true),
-    enable_cleaning: WizardState.enable_cleaning ?? true,
-    cleaning_mode: WizardState.cleaning_mode || 'standard',
-    keep_images: WizardState.keep_images ?? true,
-    cleaning_batch_size: WizardState.cleaning_batch_size ?? 20,
-    site_mode: WizardState.site_mode || 'auto',
-  };
+  // 爬取参数统一走后端默认值（并发 3 等），网页端不再提供配置项；
+  // LLM 由服务端 config.json 决定（配置中心保存后经 _sync_llm_config 三同步生效）。
+  let body = { urls: urls };
 
   try {
     let headers = {'Content-Type':'application/json'};
@@ -1035,11 +760,33 @@ async function startCrawl() {
       document.getElementById('statusLabel').textContent = '错误: '+e.message;
       addLog('❌ '+esc(e.message), 'error');
     }
+  } finally {
+    crawlRunning = false;
   }
 }
 
 function handleSseEvent(evt) {
   switch(evt.type) {
+    case 'site_start':
+      // 新站点开始：重置本站在页面列表中的起点与单站快照，更新站点切换条
+      siteIndex = evt.index || 1;
+      siteTotal = evt.total || 1;
+      currentSiteUrl = evt.url || '';
+      sitePages = [];
+      siteBaseIdx = pageResults.length;
+      cleanedDir = '';
+      cleanStats = null;
+      currentCleanMode = 'raw';
+      dagNodeStates = {probe:'waiting', derive:'waiting', crawl:'waiting', validate:'waiting', clean:'waiting', finalize:'waiting'};
+      renderDag();
+      document.getElementById('retryLabel').style.display = 'none';
+      document.getElementById('statusLabel').textContent = '站点 '+evt.index+'/'+evt.total+'：'+evt.url;
+      document.getElementById('progressBar').style.width = '0%';
+      document.getElementById('pageCounter').textContent = '0/50 页';
+      document.getElementById('nodeDetails').textContent = '';
+      renderSiteChips();
+      addLog('🌐 站点 '+evt.index+'/'+evt.total+'：'+esc(evt.url), 'info');
+      break;
     case 'node_start':
       setNodeState(evt.node, 'running');
       moveFlowDot(evt.node);
@@ -1055,24 +802,16 @@ function handleSseEvent(evt) {
         cleanStats = evt.state.clean_stats || null;
       }
       if (evt.node === 'finalize') {
-        document.getElementById('statusLabel').innerHTML = verdictIcon(true) + ' 完成';
         crawlMetrics = evt.state;
         WizardState.finalState = evt.state;
         saveWizardState();
-        setTimeout(goStep4, 800);
+        // 每站完成即写入一条历史（服务端 SQLite 持久化）
+        saveSiteHistory();
       }
       break;
     case 'page_crawled':
-      // 兜底：重试换轮后 result_dir 变化（新轮次目录），旧轮记录指向已被
-      // 删除的目录（crawl 节点重爬前 rmtree 旧 result_dir）。旧代码 retry 事件
-      // 未发出导致这里不清空 → 前端点击旧记录 404。检测到目录切换即清空。
-      if (pageResults.length > 0 && evt.result_dir && pageResults[0].result_dir
-          && evt.result_dir !== pageResults[0].result_dir) {
-        pageResults = [];
-        currentPageMd = {};
-        document.getElementById('pageCounter').textContent = '0/'+(WizardState.max_pages||50)+' 页';
-      }
       pageResults.push(evt);
+      if (sitePages) sitePages.push(evt);
       let max = WizardState.max_pages || 50;
       let pct = Math.min(100, Math.round((evt.page_count / max) * 100));
       document.getElementById('progressBar').style.width = pct+'%';
@@ -1092,8 +831,9 @@ function handleSseEvent(evt) {
       addLog(cleanIcon+' '+esc(evt.file)+' — '+evt.status+cleanMsg, evt.status==='failed'?'error':'success');
       break;
     case 'retry':
-      // 重试开始：重置页面列表，避免新轮次与旧轮次重复
-      pageResults = [];
+      // 重试开始：只回滚当前站点的页（之前站点已入列表，不能清空），避免新旧轮次重复
+      pageResults.splice(siteBaseIdx);
+      sitePages = [];
       currentPageMd = {};
       document.getElementById('pageCounter').textContent = '0/'+(WizardState.max_pages||50)+' 页';
       document.getElementById('progressBar').style.width = '0%';
@@ -1107,13 +847,61 @@ function handleSseEvent(evt) {
     case 'done':
       // done 事件携带 status：success / failed。
       // 后端 stream_graph 曾静默吞异常导致 pumper 死亡仍发"成功"——前端误报完成。
-      // 现在 failed 时明确标红，不显示"完成"。
+      // 现在 failed 时明确标红，不显示"完成"。无论成败都跳转查看结果（失败也可看部分数据）。
       if (evt.status === 'failed') {
         document.getElementById('statusLabel').innerHTML = '<span style="color:var(--danger);">❌ 爬取异常终止</span>';
         addLog('❌ 爬取流程异常终止（图执行中断）', 'error');
+      } else if (siteTotal > 1) {
+        document.getElementById('statusLabel').innerHTML = verdictIcon(true) + ' 全部 '+siteTotal+' 个站点完成';
+      } else {
+        document.getElementById('statusLabel').innerHTML = verdictIcon(true) + ' 完成';
       }
+      setTimeout(goStep3, 800);
       break;
   }
+}
+
+// 站点切换条：已完成的绿色、当前高亮、未开始灰色
+function renderSiteChips() {
+  let bar = document.getElementById('siteBar');
+  let chips = document.getElementById('siteChips');
+  if (!bar || !chips) return;
+  let urls = (WizardState.urls && WizardState.urls.length) ? WizardState.urls : (WizardState.url ? [WizardState.url] : []);
+  if (!urls.length) { bar.style.display = 'none'; return; }
+  bar.style.display = 'block';
+  chips.innerHTML = urls.map((u, i) => {
+    let idx = i + 1;
+    let style;
+    if (idx < siteIndex) style = 'background:rgba(34,197,94,0.12);color:var(--success);border:1px solid rgba(34,197,94,0.3);';
+    else if (idx === siteIndex) style = 'background:var(--primary);color:#fff;border:1px solid var(--primary);';
+    else style = 'background:var(--bg);color:var(--text-sec);border:1px solid var(--border);';
+    return `<span title="${esc(u)}" style="padding:4px 10px;border-radius:12px;font-size:12px;white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis;${style}">${idx}. ${esc(u)}</span>`;
+  }).join('');
+}
+
+// 每站爬取完成写入一条历史记录（服务端 SQLite 持久化，跨浏览器/重启保留）
+function saveSiteHistory() {
+  let token = getToken();
+  let url = currentSiteUrl || WizardState.url || '';
+  if (!url) return;
+  let body = {
+    timestamp: new Date().toISOString(),
+    urls: [url],
+    status: (crawlMetrics && crawlMetrics.verdict === 'pass') ? 'pass' : 'review',
+    page_count: (sitePages || []).length,
+    site_mode: 'auto',
+    result_dirs: [(crawlMetrics && crawlMetrics.result_dir) || ''],
+    pages: sitePages || [],
+    metrics: crawlMetrics || null,
+    cleaned_dir: cleanedDir || '',
+    clean_stats: cleanStats || {},
+    edits: WizardState.edits || {},
+  };
+  fetch('/history', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', ...(token ? {'Authorization': 'Bearer '+token} : {})},
+    body: JSON.stringify(body),
+  }).catch(() => {});
 }
 
 function updateStatusLabel(node) {
@@ -1167,6 +955,7 @@ function addLog(msg, cls) {
 
 function stopCrawl() {
   if (abortController) abortController.abort();
+  crawlRunning = false;
   document.getElementById('statusLabel').textContent = '已停止';
 }
 
@@ -1212,8 +1001,8 @@ function setNodeState(node, status) {
   dagNodeStates[node] = status;
   let els = dagEls[node];
   if (!els) return;
-  let color = {done:'#059669', running:'#2563EB', skipped:'#D97706', error:'#DC2626', waiting:'#CBD5E1'}[status] || '#CBD5E1';
-  let fill = {done:'rgba(5,150,105,0.08)', running:'rgba(37,99,235,0.08)', skipped:'rgba(217,119,6,0.08)', error:'rgba(220,38,38,0.08)'}[status] || '#FFFFFF';
+  let color = {done:'#059669', running:'#0D9488', skipped:'#D97706', error:'#DC2626', waiting:'#CBD5E1'}[status] || '#CBD5E1';
+  let fill = {done:'rgba(5,150,105,0.08)', running:'rgba(13,148,136,0.08)', skipped:'rgba(217,119,6,0.08)', error:'rgba(220,38,38,0.08)'}[status] || '#FFFFFF';
   els.rect.setAttribute('class', 'dag-node ' + status);
   els.rect.setAttribute('fill', fill);
   els.rect.setAttribute('stroke', color);
@@ -1924,13 +1713,6 @@ function downloadSummary() {
     url: WizardState.url,
     timestamp: new Date().toISOString(),
     pageCount: pageResults.length,
-    config: {
-      max_depth: WizardState.max_depth, max_pages: WizardState.max_pages,
-      concurrent: WizardState.concurrent,
-      site_mode: WizardState.site_mode || 'auto',
-      enable_cleaning: WizardState.enable_cleaning ?? true,
-      cleaning_mode: WizardState.cleaning_mode || 'standard',
-    },
     metrics: crawlMetrics?.metrics || {},
     verdict: crawlMetrics?.verdict || '',
     feedback: crawlMetrics?.feedback || '',
@@ -2083,6 +1865,7 @@ function startNew() {
   currentCleanMode = 'raw';
   crawlMetrics = null;
   currentPreviewPage = null;
+  urlList = [];   // 清空 TXT 导入列表
   hideDbAddr();   // 新任务收起数据库地址栏（WizardState 重置已清掉持久化）
   saveWizardState();
   showStep(1);
@@ -2090,115 +1873,122 @@ function startNew() {
   validateUrl();
 }
 
-// ==================== HISTORY ====================
+// ==================== HISTORY（服务端 SQLite） ====================
 function toggleHistory() {
   document.getElementById('historyDrawer').classList.toggle('open');
   document.getElementById('drawerOverlay').classList.toggle('open');
-  renderHistory();
+  loadHistoryFromServer().then(items => {
+    historyCache = items;
+    renderHistory();
+  });
+}
+
+// 拉取服务端历史列表（含首 URL、页数、站点数等摘要）
+async function loadHistoryFromServer() {
+  try {
+    let resp = await fetch('/history', { headers: _authHeaders() });
+    if (!resp.ok) return [];
+    let data = await resp.json();
+    return (data && data.items) || [];
+  } catch (e) { return []; }
 }
 
 function renderHistory() {
-  let q = (document.getElementById('historySearch')?.value||'').toLowerCase();
-  let filtered = history.filter(h => !q || h.url.toLowerCase().includes(q));
   let div = document.getElementById('historyList');
+  if (!div) return;
+  let q = (document.getElementById('historySearch')?.value || '').toLowerCase();
+  let filtered = historyCache.filter(h => !q || ((h.first_url || '').toLowerCase().includes(q)));
   if (filtered.length === 0) {
     div.innerHTML = '<p style="color:var(--text-sec);">暂无历史记录</p>';
     return;
   }
   div.innerHTML = filtered.map(h => `
     <div class="card" style="margin-bottom:8px;font-size:13px;padding:16px;">
-      <div style="color:var(--text-sec);font-size:11px;">${esc(h.timestamp||'?')}</div>
-      <div style="margin:4px 0;color:var(--text);">${esc(h.url||'?')}</div>
-      <div style="color:var(--text-sec);font-size:12px;">${h.status==='pass'?verdictIcon(true)+' 通过':verdictIcon(false)+' 需复核'} | ${h.pageCount||0} 页 | 深度 ${h.maxDepth||0} 层 | 模式 ${({auto:'自动识别',static:'静态官网',dynamic:'动态官网'})[h.siteMode]||'自动识别'}</div>
+      <div style="color:var(--text-sec);font-size:11px;">${esc(h.created_at || '?')}</div>
+      <div style="margin:4px 0;color:var(--text);">${esc(h.first_url || '?')}</div>
+      <div style="color:var(--text-sec);font-size:12px;">${h.status==='pass'?verdictIcon(true)+' 通过':verdictIcon(false)+' 需复核'} | ${h.page_count||0} 页</div>
       <div style="display:flex;gap:4px;margin-top:8px;">
-        <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;" onclick="viewHistory('${h.id}')">查看结果</button>
-        <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;" onclick="reCrawl('${h.id}')">重新爬取</button>
-        <button class="btn btn-danger" style="padding:4px 10px;font-size:11px;" onclick="deleteHistory('${h.id}')">删除</button>
+        <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;" onclick="viewHistory(${h.id})">查看结果</button>
+        <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;" onclick="reCrawl(${h.id})">重新爬取</button>
+        <button class="btn btn-danger" style="padding:4px 10px;font-size:11px;" onclick="deleteHistory(${h.id})">删除</button>
       </div>
     </div>
   `).join('');
 }
 
-function addToHistory() {
-  let entry = {
-    id: Date.now().toString(36)+Math.random().toString(36).slice(2,8),
-    timestamp: new Date().toISOString(),
-    url: WizardState.url,
-    status: crawlMetrics?.verdict === 'pass' ? 'pass' : 'review',
-    pageCount: pageResults.length,
-    maxDepth: WizardState.max_depth || 3,
-    siteMode: WizardState.site_mode || 'auto',
-    resultDir: crawlMetrics?.result_dir || '',
-    edits: WizardState.edits || {},
-    pageResults: pageResults,
-    metrics: crawlMetrics,
-    cleanedDir: cleanedDir || '',
-    cleanStats: cleanStats || {},
-  };
-  history.unshift(entry);
-  if (history.length > 100) history = history.slice(0, 100);
-  saveHistory();
-}
+// 查看历史：拉取该条完整数据，恢复页面/清洗状态后进入第 3 步
+async function viewHistory(id) {
+  let h = null;
+  try {
+    let resp = await fetch('/history/' + id, { headers: _authHeaders() });
+    if (!resp.ok) throw new Error('加载失败');
+    h = await resp.json();
+  } catch (e) {
+    alert('历史记录加载失败: ' + e.message);
+    return;
+  }
+  WizardState.url = (h.urls && h.urls[0]) || '';
+  WizardState.urls = h.urls || [WizardState.url];
 
-function viewHistory(id) {
-  let h = history.find(e => e.id === id);
-  if (!h) return;
-  WizardState.url = h.url;
-  WizardState.max_depth = h.maxDepth;
-  
   // 恢复编辑内容，区分原始和清洗后的编辑
-  if (h.edits) {
-    WizardState.edits = h.edits;
-    currentPageMd = {};
-    currentPageMdCleaned = {};
-    
-    for (let key in h.edits) {
-      if (key.startsWith('cleaned_')) {
-        // 清洗后的编辑
-        let url = key.replace('cleaned_', '');
-        currentPageMdCleaned[url] = h.edits[key];
-      } else {
-        // 原始编辑
-        currentPageMd[key] = h.edits[key];
-      }
+  WizardState.edits = h.edits || {};
+  currentPageMd = {};
+  currentPageMdCleaned = {};
+  let edits = h.edits || {};
+  for (let key in edits) {
+    if (key.startsWith('cleaned_')) {
+      currentPageMdCleaned[key.replace('cleaned_', '')] = edits[key];
+    } else {
+      currentPageMd[key] = edits[key];
     }
   }
-  
-  // Restore page results from history if available
-  if (h.pageResults) pageResults = h.pageResults;
-  if (h.metrics) crawlMetrics = h.metrics;
-  // Restore cleaned data from history
-  if (h.cleanedDir) cleanedDir = h.cleanedDir;
-  if (h.cleanStats) cleanStats = h.cleanStats;
+
+  pageResults = (h.pages || []).slice();
+  crawlMetrics = h.metrics || null;
+  cleanedDir = h.cleaned_dir || '';
+  cleanStats = h.clean_stats || {};
+  currentCleanMode = 'raw';
+  currentPageMdCleaned = {};
   saveWizardState();
   toggleHistory();
-  _suppressHistory = true;
-  goStep4();
+  showStep(3);
+  loadResults();
 }
 
-function reCrawl(id) {
-  let h = history.find(e => e.id === id);
-  if (!h) return;
-  WizardState.url = h.url;
-  WizardState.max_depth = h.maxDepth;
-  if (h.siteMode) WizardState.site_mode = h.siteMode;
+// 重新爬取：把该站 URL 作为新任务目标并立即启动
+async function reCrawl(id) {
+  let h = null;
+  try {
+    let resp = await fetch('/history/' + id, { headers: _authHeaders() });
+    if (!resp.ok) throw new Error('加载失败');
+    h = await resp.json();
+  } catch (e) {
+    alert('历史记录加载失败: ' + e.message);
+    return;
+  }
+  let urls = (h.urls && h.urls.length) ? h.urls.slice() : [WizardState.url];
+  WizardState.urls = urls;
+  WizardState.url = urls[0];
   saveWizardState();
-  buildConfigUI(); // 重建配置面板，让模式卡片与参数恢复一致
   toggleHistory();
   goStep2();
 }
 
-function deleteHistory(id) {
+async function deleteHistory(id) {
   if (!confirm('确定删除这条记录？')) return;
-  history = history.filter(e => e.id !== id);
-  saveHistory();
+  try {
+    await fetch('/history/' + id, { method: 'DELETE', headers: _authHeaders() });
+  } catch (e) {}
+  historyCache = await loadHistoryFromServer();
   renderHistory();
 }
 
-function clearHistory() {
+async function clearHistory() {
   if (!confirm('确定清空全部历史记录？此操作不可撤销。')) return;
-  history = [];
-  saveHistory();
+  try {
+    await fetch('/history', { method: 'DELETE', headers: _authHeaders() });
+  } catch (e) {}
+  historyCache = [];
   renderHistory();
 }
 
@@ -2282,21 +2072,11 @@ function init() {
   // Restore 上次导入的数据库地址栏
   restoreDbAddr();
 
-  buildConfigUI();
   showStep(currentStep);
   validateUrl();
   renderDag();
   initSplitter();
 }
-
-// Override goStep4 to add history
-let _origGoStep4 = goStep4;
-let _suppressHistory = false;
-goStep4 = function() {
-  if (!_suppressHistory) addToHistory();
-  _suppressHistory = false;
-  _origGoStep4();
-};
 
 // ===== LLM CONFIG CENTER MODAL（统一配置中心） =====
 // 三合一：① 当前模型（provider/model，持久化 /llm/config，全端生效）
@@ -2312,8 +2092,6 @@ function openKeyMgmt() {
 
 function closeKeyMgmt() {
   document.getElementById('keyMgmtOverlay').style.display = 'none';
-  // 关闭时把配置中心可能变更的 active/注册表同步回 Step2 下拉
-  loadLlmServerConfig();
 }
 
 // XSS 防御：转义服务端数据后再插入 HTML（用于含结构化标签的场景）。
@@ -2420,7 +2198,6 @@ async function saveCenterActive() {
       // 刷新「当前生效」信息行，避免停留在旧值
       let infoLine = document.getElementById('centerActiveInfo');
       if (infoLine) infoLine.textContent = '当前生效：' + ((info && info.label) || provider) + (model ? ' / ' + model : '');
-      loadLlmKeyStatus();
     } else {
       statusEl.textContent = '❌ ' + (data.error || '保存失败');
       statusEl.style.color = 'var(--danger)';
@@ -2491,7 +2268,7 @@ function _renderCenterKeys(data) {
 
     let btnTest = document.createElement('button');
     btnTest.textContent = '测试';
-    btnTest.style.cssText = 'font-size:12px;padding:4px 10px;border-radius:4px;border:1px solid var(--border);background:#F8FAFC;cursor:pointer;margin-right:4px;';
+    btnTest.style.cssText = 'font-size:12px;padding:4px 10px;border-radius:4px;border:1px solid var(--border);background:#F6FBF9;cursor:pointer;margin-right:4px;';
     btnTest.addEventListener('click', function() { testKeyFromMgmt(safeId, p.id); });
 
     let btnSave = document.createElement('button');
