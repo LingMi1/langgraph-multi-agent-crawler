@@ -399,6 +399,42 @@ def _fetch_with_playwright_sync(url: str, use_system_chrome: bool = False) -> Tu
 # FetcherRouter 实现
 # ============================================================================
 
+# ★ HTML 编码兜底解码：httpx 的 resp.text 按响应头 charset 或默认 UTF-8 解码，
+#   对未声明 charset 的 GBK/GB2312 老站会解成乱码（标题变 ��� 进文件名）。
+#   解码优先级：响应头 charset > HTML <meta charset> > UTF-8 尝试 > GB18030。
+_META_CHARSET_RE = re.compile(
+    r'<meta[^>]+charset\s*=\s*["\']?\s*([a-zA-Z0-9_\-]+)', re.I
+)
+
+
+def _decode_response(resp: httpx.Response) -> str:
+    """按响应头 / meta charset 正确解码响应体，防 GBK 老站乱码。"""
+    raw = resp.content
+    if not raw:
+        return ""
+
+    charset = ""
+    ctype = resp.headers.get("content-type", "")
+    m = re.search(r"charset\s*=\s*[\"']?([a-zA-Z0-9_\-]+)", ctype, re.I)
+    if m:
+        charset = m.group(1)
+
+    if not charset:
+        head = raw[:4096].decode("ascii", errors="ignore")
+        m = _META_CHARSET_RE.search(head)
+        if m:
+            charset = m.group(1)
+
+    for enc in (charset, "utf-8", "gb18030"):
+        if not enc:
+            continue
+        try:
+            return raw.decode(enc)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
 class HttpxPlaywrightFetcher(FetcherRouterInterface):
     """
     基于 httpx + Playwright 降级的抓取器。
@@ -517,7 +553,7 @@ class HttpxPlaywrightFetcher(FetcherRouterInterface):
                         "Upgrade-Insecure-Requests": "1",
                     },
                 )
-                html = resp.text
+                html = _decode_response(resp)
 
                 # ★ 捕获响应 Cookie（供后续图片下载绕过防盗链）
                 resp_cookies = {}

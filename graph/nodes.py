@@ -1330,10 +1330,10 @@ async def _process_one_url(
     loop = asyncio.get_running_loop()
     raw_html = page.html  # 保留原始 HTML（分页提取等需要未处理的 DOM）
 
-    # ── 404 页面过滤：Web 服务器默认 404 页（Apache/nginx）无真实内容，直接丢弃 ──
-    if _looks_like_404(raw_html):
+    # ── 错误页过滤：Web 服务器默认 404/5xx/中文错误页无真实内容，直接丢弃 ──
+    if _looks_like_error_page(raw_html):
         stats["skipped"] = stats.get("skipped", 0) + 1
-        agent_logger.info(f"[Graph::fetch_extract] 404 页面丢弃 | {url[:80]}")
+        agent_logger.info(f"[Graph::fetch_extract] 服务器错误页丢弃 | {url[:80]}")
         return []
     rescued, img_stats = await loop.run_in_executor(None, _rescue_images, page.html, url)
     rescued_html = rescued  # 保存抢救后的原始 HTML（后续图片合并用）
@@ -2960,6 +2960,48 @@ def _looks_like_404(content: str) -> bool:
     return False
 
 
+# ★ 服务器错误页签名（HTTP 5xx / 中文错误页）。命中即整页丢弃，不进入清洗/保存。
+#   背景：huinenggroup 等站的失效链接返回 500 错误页，标题为"服务器错误"，
+#   会被当成正常文章落盘并占据一级目录名。
+_ERROR_PAGE_TITLE_RE = re.compile(
+    r"(服务器错误|内部服务器错误|系统繁忙|页面错误|网络错误|数据库错误|"
+    r"访问错误|页面不存在|找不到该页|您访问的页面|请求的页面|"
+    r"error|internal server error|service unavailable|bad gateway|"
+    r"gateway timeout|forbidden|access denied|request error)",
+    re.I,
+)
+
+
+def _looks_like_error_page(content: str) -> bool:
+    """判断 HTML 是否为服务器错误页（500/502/503/中文错误页）。
+
+    与 _looks_like_404 互补：404 只覆盖 Apache/nginx 默认签名，这里兜底
+    5xx 与中文错误页（标题含"服务器错误"等），防止错误页混入站点输出。
+    """
+    if not content:
+        return False
+    if _looks_like_404(content):
+        return True
+    lower = content[:4000].lower()
+    # HTTP 5xx 状态签名（常见于响应体第一行/页面标题）
+    if re.search(r"<(?:title|h1|h2)[^>]*>\s*5\d\d\s", lower):
+        return True
+    # 中文错误页标题兜底（标题即错误说明，正文通常极短）
+    m = re.search(r"<title[^>]*>([^<]{1,60})</title>", content, re.I | re.S)
+    if m:
+        title = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+        title = re.sub(r"\s+", " ", title).strip(" .-_")
+        if title and _ERROR_PAGE_TITLE_RE.search(title):
+            return True
+    # 无 title 时的正文短文本命中（防脏链接站）
+    if re.search(r"(服务器错误|service unavailable|internal server error)", lower):
+        body_text = re.sub(r"<[^>]+>", " ", content)
+        body_text = re.sub(r"\s+", " ", body_text).strip()
+        if len(body_text) < 800:
+            return True
+    return False
+
+
 def _extract_meta_refresh_url(content: bytes) -> str:
     """从 meta refresh HTML 跳转页中解析目标 URL（可能为相对路径）。"""
     try:
@@ -3329,6 +3371,10 @@ _saved_html_paths: Set[str] = set()
 _saved_content_hashes: Dict[str, str] = {}
 # URL 级去重（同一 URL 只保存一次，防止多路径入队导致 _1 重复）
 _saved_urls: Set[str] = set()
+# 正文文本级去重（nav_path 不一致导致的同文双存：同一文章经不同 URL/导航路径
+# 入队两次时，完整 HTML 略有差异（如侧栏/时间戳），MD5 挡不住 → 用清洗后
+# 正文纯文本指纹再兜底，正文相同即视为同一篇文章）
+_saved_text_hashes: Dict[str, str] = {}
 
 
 # ============================================================================
@@ -3532,8 +3578,8 @@ def _extract_breadcrumb_nav(rescued_html: str) -> list:
         if not text or len(text) < 5:
             continue
 
-        # ── 按分隔符拆 ──
-        parts = _re2.split(r'\s*[>＞»→/\|]\s*', text)
+        # ── 按分隔符拆（含连字符：老站面包屑常用「首页 - 栏目 - 子栏目」） ──
+        parts = _re2.split(r'\s*(?:>＞»→/\||[-—–])\s*', text)
         parts = [p.strip() for p in parts if p.strip()]
 
         # 过滤掉前缀文本（如 "你现在的位置："、"当前位置："）
@@ -5309,6 +5355,20 @@ async def _save_html_file(page: PageData, output_dir: str) -> str:
         return first_path
     _saved_content_hashes[html_md5] = ""  # 先占位，写入后更新
 
+    # ── 正文文本级去重：nav_path 不一致导致的同文双存兜底 ──
+    #   （同一文章经不同 URL 入队两次，完整 HTML 因侧栏/时间戳略有差异，
+    #    上方 HTML MD5 无法命中；清洗后正文纯文本相同即视为同一篇，跳过）
+    text_md5 = _body_text_md5(page.html or "")
+    if text_md5 and text_md5 in _saved_text_hashes:
+        first_path = _saved_text_hashes[text_md5]
+        agent_logger.info(
+            f"[Graph::save] 正文重复跳过 | text_md5={text_md5[:8]} | "
+            f"已保存于 {first_path} | {page.url[:60]}"
+        )
+        return first_path
+    if text_md5:
+        _saved_text_hashes[text_md5] = ""  # 先占位，写入后更新
+
     # ── URL 级去重：同一 URL 只保存一次，防止多路径入队导致 _1 重复 ──
     url_key = _url_key(page.url)
     if url_key in _saved_urls:
@@ -5373,9 +5433,35 @@ async def _save_html_file(page: PageData, output_dir: str) -> str:
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, _write_html_file, file_path, page.html)
     # 更新内容哈希映射为实际文件路径
-    _saved_content_hashes[html_md5] = os.path.relpath(file_path, output_dir)
+    rel = os.path.relpath(file_path, output_dir)
+    _saved_content_hashes[html_md5] = rel
+    if text_md5:
+        _saved_text_hashes[text_md5] = rel
 
-    return os.path.relpath(file_path, output_dir)
+    return rel
+
+
+def _body_text_md5(html: str) -> str:
+    """提取清洗后 HTML 的正文纯文本指纹（MD5）。
+
+    用于同文双存兜底去重：同一篇文章经不同 URL/导航路径各落盘一次时，
+    完整 HTML 往往因侧栏、时间戳、导航差异而 MD5 不同（实测差 20 字节），
+    但正文纯文本一致 → 据此判定为同一篇文章。
+    返回 "" 表示无法提取（空内容），不参与去重。
+    """
+    if not html:
+        return ""
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+    except Exception:
+        return ""
+    for tag in soup.find_all(["script", "style", "noscript"]):
+        tag.decompose()
+    text = soup.get_text(" ", strip=True)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) < 80:
+        return ""  # 正文过短（列表页/错误页），不以此判定重复
+    return hashlib.md5(text.encode("utf-8", errors="replace")).hexdigest()
 
 
 def _write_html_file(path: str, html: str) -> None:
