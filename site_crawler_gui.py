@@ -62,7 +62,7 @@ class CrawlerGUI:
         self._last_fetched = 0      # 当前站已处理页数（停止时保留显示用）
         self._site_index = 0        # 当前站点序号（1-based）
         self._site_total = 0        # 站点总数
-        self._peak_total = 0        # 当前站已发现页数峰值（防 BFS 队列增长导致百分比倒退）
+        self._fetch_ratio = 0        # 当前站已处理/已发现实时比例峰值（防 BFS 比例倒退）
 
         # ★ 流水线监控状态
         self._current_url = ""      # 当前正在处理的页面 URL
@@ -384,7 +384,7 @@ class CrawlerGUI:
             self._site_index = i + 1
             self._site_total = total_targets
             self._last_fetched = 0
-            self._peak_total = 0
+            self._fetch_ratio = 0
             self._update_progress(0, 1, f"爬取中 第{i+1}/{total_targets}个站: {url[:50]}")
 
             site_dir = None  # 记录当前网站的保存路径
@@ -458,15 +458,21 @@ class CrawlerGUI:
             self.root.after(0, self._reset_ui)
 
     def _lg_progress(self, fetched, queue_len, url, phase="fetch"):
-        """LangGraph 进度回调：fetched=已处理数, queue_len=剩余数
+        """LangGraph 进度回调
+
+        参数语义分两种：
+          fetch     → fetched=已处理页数, queue_len=剩余页数（BFS 动态总量）
+          rescue/media → fetched=已处理条数, queue_len=总条数
+          scout/navigate/evaluate/storage → 阶段完成标记
 
         阶段加权进度，保证单调且只有全部完成才到 100%：
           scout     → 3%
           navigate  → 5%
-          fetch     → 5%–75%（BFS：分母取峰值，防队列增长导致倒退）
-          rescue    → 75%–87%（按抢救条数推进）
+          fetch     → 5%–75%（实时比例 fetched/(fetched+queue) 取峰值，防倒退；
+                             队列清空即达 75%，与「剩 0 页」标签一致）
+          rescue    → 75%–87%（已抢救条数/总条数）
           evaluate  → 90%
-          media     → 90%–98%（按内嵌图片页数推进）
+          media     → 90%–98%（已内嵌页数/总页数）
           storage   → 99%（写文件，完成后由 _reset_ui 置 100%）
         """
         self._last_fetched = fetched
@@ -478,22 +484,20 @@ class CrawlerGUI:
             self._set_progress_pct(0.05, "生成栏目导航...")
         elif phase == "fetch":
             total = fetched + queue_len
-            if total > self._peak_total:
-                self._peak_total = total
-            frac = (fetched / self._peak_total) if self._peak_total > 0 else 0
+            live = (fetched / total) if total > 0 else 0
+            if live > self._fetch_ratio:
+                self._fetch_ratio = live
             label = f"爬取中 第{self._site_index}/{self._site_total}个站 · 已处理{fetched}页 剩{queue_len}页"
-            self._set_progress_pct(0.05 + 0.70 * frac, label)
+            self._set_progress_pct(0.05 + 0.70 * self._fetch_ratio, label)
         elif phase == "rescue":
-            total = fetched + queue_len
-            frac = (fetched / total) if total > 0 else 0
-            label = f"批量抢救低质页 {fetched}/{total}"
+            frac = (fetched / queue_len) if queue_len > 0 else 0
+            label = f"批量抢救低质页 {fetched}/{queue_len}"
             self._set_progress_pct(0.75 + 0.12 * frac, label)
         elif phase == "evaluate":
             self._set_progress_pct(0.90, "LLM 评估与汇总...")
         elif phase == "media":
-            total = fetched + queue_len
-            frac = (fetched / total) if total > 0 else 0
-            label = f"内嵌图片 {fetched}/{total} 页"
+            frac = (fetched / queue_len) if queue_len > 0 else 0
+            label = f"内嵌图片 {fetched}/{queue_len} 页"
             self._set_progress_pct(0.90 + 0.08 * frac, label)
         else:  # storage
             self._set_progress_pct(0.99, "写入文件...")
@@ -570,9 +574,14 @@ class CrawlerGUI:
         self.root.after(0, lambda: self._set_progress(current, total, label))
 
     def _set_progress_pct(self, frac, label):
-        """按百分比(0~1)设置进度条，钳制在 0~100，避免阶段加权越界。"""
+        """按百分比(0~1)设置进度条：钳制 0~100，且单调不倒退。
+
+        阶段加权下，「评估不通过→调整重来」回路会重放 navigate 标记导致
+        百分比倒退，这里以当前条值作下限；新站由 _set_site 显式重置为 0。
+        """
         frac = max(0.0, min(1.0, frac))
-        self.root.after(0, lambda: self._set_progress(frac * 100, 100, label))
+        self.root.after(0, lambda v=frac * 100: self._set_progress(
+            max(v, self.progress_bar['value']), 100, label))
 
     def _set_progress(self, c, t, lb):
         self.progress_bar['value'] = (c / t) * 100 if t > 0 else 0

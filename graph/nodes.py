@@ -2074,6 +2074,21 @@ async def _rescue_pending_pages(
 
     located: Dict[str, str] = {}
     locate_failed: set = set()
+    # ★ 进度回调：模板定位组数 + 抢救条目数 = 总工作量，全程逐单位上报，
+    #   避免「模板定位 2-4 分钟无回调 → 进度条冻死」的假死现象。
+    _pcb = state.get("progress_callback")
+    _rescue_total = len(entries) + len(overflow)
+    _rescue_done = 0
+    _locate_units = 0
+
+    def _rp() -> None:
+        if _pcb:
+            try:
+                _pcb(_locate_units + _rescue_done, _locate_units + _rescue_total,
+                     "", "rescue")
+            except Exception:
+                pass
+
     if llm_usable:
         groups: Dict[str, List[Dict]] = {}
         for e in entries:
@@ -2081,13 +2096,16 @@ async def _rescue_pending_pages(
         max_tpl = max(1, int(getattr(config, "RESCUE_MAX_TEMPLATES", 6)))
         ordered = sorted(groups.items(), key=lambda kv: -len(kv[1]))
         for tkey, group in ordered:
+            _locate_units += 1
             if len(located) >= max_tpl:
                 locate_failed.add(tkey)  # 模板预算耗尽 → 组内降级保存
+                _rp()
                 continue
             rep = group[0]
             html = await _rescue_fetch_html(rep.get("url", ""), profile, config_dict)
             if not html or len(html) < 100:
                 locate_failed.add(tkey)
+                _rp()
                 continue
             selector = await _llm_locate_content_selector(
                 html, rep.get("url", ""), seed_url, site_name, allow_llm=True
@@ -2096,6 +2114,7 @@ async def _rescue_pending_pages(
                 located[tkey] = selector
             else:
                 locate_failed.add(tkey)
+            _rp()
             if not llm_breaker.check():
                 # 定位途中熔断打开：剩余模板全部降级保存（不在半死端点上继续等）
                 for tk2 in groups:
@@ -2117,10 +2136,6 @@ async def _rescue_pending_pages(
         if row:
             rows.append(row)
 
-    # ★ 进度回调（GUI 进度条）：抢救阶段逐条上报
-    _pcb = state.get("progress_callback")
-    _rescue_total = len(entries) + len(overflow)
-    _rescue_done = 0
     for e in entries:
         tkey = _tkey(e.get("url", ""))
         if not config.DEEPSEEK_API_KEY:
@@ -2133,19 +2148,11 @@ async def _rescue_pending_pages(
             skip = ""
         await _run_one(e, skip)
         _rescue_done += 1
-        if _pcb:
-            try:
-                _pcb(_rescue_done, _rescue_total, e.get("url", ""), "rescue")
-            except Exception:
-                pass
+        _rp()
     for e in overflow:
         await _run_one(e, "budget")
         _rescue_done += 1
-        if _pcb:
-            try:
-                _pcb(_rescue_done, _rescue_total, e.get("url", ""), "rescue")
-            except Exception:
-                pass
+        _rp()
 
     if rows or stats_inc:
         agent_logger.info(
