@@ -1,0 +1,2746 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>智慧企业数据获取平台</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><circle cx='12' cy='12' r='10' fill='none' stroke='%232563EB' stroke-width='2'/><ellipse cx='12' cy='12' rx='4' ry='10' fill='none' stroke='%232563EB' stroke-width='2'/><path d='M2 12h20' fill='none' stroke='%232563EB' stroke-width='2'/></svg>" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="vendor/marked.min.js"></script>
+<script src="vendor/purify.min.js"></script>
+<script src="vendor/jszip.min.js"></script>
+<script src="vendor/FileSaver.min.js"></script>
+<script type="module">
+import {EditorView, EditorState, basicSetup, markdown, html, oneDark, undo, redo, jsBeautify} from "./vendor/codemirror.bundle.mjs";
+window.CodeMirrorModule = {EditorView, EditorState, basicSetup, markdown, html, oneDark};
+window.CodeMirrorCmd = {undo, redo};
+window.jsBeautify = jsBeautify;
+</script>
+<style>
+  :root {
+    --primary: #2563EB;
+    --primary-hov: #1D4ED8;
+    --primary-lit: #EFF6FF;
+    --accent: #7C3AED;
+    --bg: #F8FAFC;
+    --card: #FFFFFF;
+    --border: #E2E8F0;
+    --text: #1E293B;
+    --text-sec: #64748B;
+    --success: #059669;
+    --success-bg: #ECFDF5;
+    --warning: #D97706;
+    --warning-bg: #FFFBEB;
+    --error: #DC2626;
+    --error-bg: #FEF2F2;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+    /* 纯色底 + 细网格装饰：两层 linear-gradient 叠出方格，对比度极低，不抢内容 */
+    background-color: var(--bg);
+    background-image:
+      linear-gradient(to right, rgba(148, 163, 184, 0.18) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(148, 163, 184, 0.18) 1px, transparent 1px);
+    background-size: 28px 28px;
+    color: var(--text); min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  /* ===== Site Mode Cards ===== */
+  .mode-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 8px; }
+  .mode-card {
+    border: 1px solid var(--border); border-radius: 10px; padding: 14px 12px;
+    cursor: pointer; text-align: center; transition: all 150ms ease; background: #FFFFFF;
+  }
+  .mode-card:hover { border-color: var(--primary); }
+  .mode-card.active { border-color: var(--primary); background: var(--primary-lit); box-shadow: 0 0 0 3px rgba(37,99,235,0.12); }
+  .mode-card .mode-title { font-size: 14px; font-weight: 600; color: var(--text); }
+  .mode-card .mode-desc { font-size: 12px; color: var(--text-sec); margin-top: 4px; line-height: 1.4; }
+  .mode-hint { font-size: 12px; color: var(--text-sec); margin-bottom: 16px; line-height: 1.5; }
+  /* ===== Step Indicator ===== */
+  .step-indicator { display: flex; align-items: flex-start; justify-content: center; padding: 24px 0 20px; }
+  .step-item { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .step-dot {
+    width: 32px; height: 32px; border-radius: 50%; display: flex;
+    align-items: center; justify-content: center; font-size: 14px; font-weight: 600;
+    border: 2px solid #CBD5E1; color: #94A3B8;
+    background: var(--card); transition: all 200ms ease;
+  }
+  .step-dot.active { border-color: var(--primary); background: var(--primary); color: #FFFFFF; box-shadow: 0 2px 8px rgba(37,99,235,0.3); }
+  .step-dot.done { border-color: var(--success); background: var(--success); color: transparent; font-size: 0; }
+  .step-dot.done::before { content: '\2713'; font-size: 14px; font-weight: 700; color: #FFFFFF; }
+  .step-label { font-size: 12px; color: var(--text-sec); font-weight: 500; white-space: nowrap; }
+  .step-line { width: 64px; height: 2px; background: #CBD5E1; align-self: center; margin-top: 15px; border-radius: 1px; flex-shrink: 0; }
+  .step-line.done { background: var(--primary); }
+  /* ===== Wizard Panels ===== */
+  .wizard-panel { display: none; max-width: 1200px; margin: 0 auto; padding: 0 20px 20px; }
+  .wizard-panel.active { display: block; }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 24px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
+  }
+  /* ===== Buttons ===== */
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 500;
+    border: none; cursor: pointer; transition: all 150ms ease; font-family: inherit;
+    line-height: 1.4; white-space: nowrap;
+  }
+  .btn-primary { background: var(--primary); color: #FFFFFF; }
+  .btn-primary:hover { background: var(--primary-hov); }
+  .btn-primary:active { background: #1E40AF; }
+  .btn-secondary { background: #FFFFFF; border: 1px solid var(--border); color: var(--text); }
+  .btn-secondary:hover { border-color: var(--primary); color: var(--primary); }
+  .btn-danger { background: #FFFFFF; border: 1px solid var(--error); color: var(--error); }
+  .btn-danger:hover { background: var(--error); color: #FFFFFF; }
+  .btn-accent { background: var(--accent); color: #FFFFFF; }
+  .btn-accent:hover { background: #6D28D9; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* ===== Form Inputs ===== */
+  input[type="text"], input[type="number"], select, textarea {
+    background: #FFFFFF; color: var(--text); border: 1px solid var(--border);
+    padding: 10px 14px; border-radius: 8px; font-size: 14px; font-family: inherit;
+    width: 100%; outline: none; transition: border-color 150ms ease, box-shadow 150ms ease;
+  }
+  input:focus, select:focus, textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+  input.error { border-color: var(--error); background: var(--error-bg); }
+  input::placeholder, textarea::placeholder { color: #94A3B8; }
+  /* ===== Sliders ===== */
+  .slider { -webkit-appearance: none; width: 100%; height: 6px; border-radius: 3px; background: var(--border); outline: none; }
+  .slider::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: var(--primary); cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+  .slider::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: var(--primary); cursor: pointer; border: none; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+  /* ===== Toggle Switches ===== */
+  .toggle-switch {
+    position: relative; display: inline-block; width: 44px; height: 24px; flex-shrink: 0;
+  }
+  .toggle-switch input { opacity: 0; width: 0; height: 0; }
+  .toggle-slider {
+    position: absolute; cursor: pointer; inset: 0;
+    background: #CBD5E1; border-radius: 24px; transition: background 200ms ease;
+  }
+  .toggle-slider:before {
+    content: ""; position: absolute; height: 18px; width: 18px;
+    left: 3px; bottom: 3px; background: #FFFFFF; border-radius: 50%;
+    transition: transform 200ms ease; box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+  }
+  input:checked + .toggle-slider { background: var(--primary); }
+  input:checked + .toggle-slider:before { transform: translateX(20px); }
+  /* ===== DAG Visualization ===== */
+  .dag-node { fill: #FFFFFF; stroke: #CBD5E1; stroke-width: 2; rx: 6; ry: 6; transition: all 500ms ease; }
+  .dag-node.running { stroke: var(--primary); animation: flowDotPulse 1.2s ease-in-out infinite; }
+  .dag-node.done { stroke: var(--success); fill: var(--success-bg); }
+  .dag-node.skipped { stroke: var(--warning); fill: var(--warning-bg); }
+  .dag-node.error { stroke: var(--error); fill: var(--error-bg); }
+  .dag-node.waiting { stroke: #CBD5E1; stroke-dasharray: 5 4; }
+  .dag-edge { stroke: #CBD5E1; stroke-width: 2; fill: none; }
+  .dag-edge.active { stroke: var(--primary); stroke-dasharray: 6 3; animation: flow 0.5s linear infinite; }
+  .dag-edge.retry { stroke: var(--warning); stroke-dasharray: 4 4; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+  @keyframes flow { to { stroke-dashoffset: -18; } }
+  /* ===== Flow Dot ===== */
+  #flowDot {
+    fill: var(--primary);
+    filter: drop-shadow(0 0 6px rgba(37,99,235,0.8));
+    transition: transform 600ms cubic-bezier(0.45, 0, 0.55, 1);
+  }
+  @keyframes flowDotPulse {
+    0%, 100% { filter: drop-shadow(0 0 2px rgba(37,99,235,0.2)); }
+    50% { filter: drop-shadow(0 0 12px rgba(37,99,235,0.6)); }
+  }
+  /* ===== Progress Stripes ===== */
+  #progressBar {
+    background-color: var(--primary);
+    background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.22) 0 12px, rgba(255,255,255,0) 12px 24px);
+    animation: progressStripes 0.9s linear infinite;
+  }
+  @keyframes progressStripes { to { background-position: 34px 0; } }
+  /* ===== History Drawer ===== */
+  .drawer {
+    position: fixed; top: 0; right: -420px; width: 400px; height: 100vh;
+    background: var(--card); border-left: 1px solid var(--border);
+    box-shadow: -4px 0 12px rgba(0,0,0,0.08);
+    transition: right 250ms ease; z-index: 1000; overflow-y: auto; padding: 24px;
+  }
+  .drawer.open { right: 0; }
+  .drawer-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.3); z-index: 999; }
+  .drawer-overlay.open { display: block; }
+  /* ===== Log ===== */
+  .log-entry { padding: 6px 0; font-size: 13px; border-bottom: 1px solid rgba(226,232,240,0.5); font-family: 'SF Mono', 'Consolas', 'Liberation Mono', monospace; line-height: 1.5; }
+  .log-entry:first-child { border-top: 1px solid rgba(226,232,240,0.5); }
+  .log-entry.success { color: var(--success); }
+  .log-entry.error { color: var(--error); }
+  .log-entry.pending { color: var(--warning); }
+  /* ===== Scrollbar ===== */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #94A3B8; }
+  /* ===== Markdown Preview ===== */
+  .render-preview h1, .render-preview h2, .render-preview h3 { color: var(--primary); margin: 16px 0 8px; font-weight: 600; }
+  .render-preview h1 { font-size: 22px; }
+  .render-preview h2 { font-size: 18px; }
+  .render-preview h3 { font-size: 16px; }
+  .render-preview p { margin: 8px 0; line-height: 1.7; color: var(--text); }
+  .render-preview ul, .render-preview ol { padding-left: 24px; margin: 8px 0; }
+  .render-preview li { line-height: 1.6; }
+  .render-preview code { background: #F1F5F9; padding: 2px 6px; border-radius: 4px; font-size: 13px; font-family: 'SF Mono', 'Consolas', 'Liberation Mono', monospace; }
+  .render-preview pre { background: #F8FAFC; padding: 16px; border-radius: 8px; overflow-x: auto; border: 1px solid var(--border); }
+  .render-preview pre code { background: none; padding: 0; }
+  .render-preview table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  .render-preview th, .render-preview td { border: 1px solid var(--border); padding: 10px 12px; text-align: left; }
+  .render-preview th { background: #F8FAFC; font-weight: 600; }
+  .render-preview img { max-width: 100%; border-radius: 6px; }
+  .render-preview a { color: var(--primary); text-decoration: none; }
+  .render-preview a:hover { text-decoration: underline; }
+  .render-preview blockquote { border-left: 3px solid var(--primary); padding-left: 16px; color: var(--text-sec); margin: 12px 0; }
+  .render-preview hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+  /* ===== Preview Tabs ===== */
+  .preview-tab { padding: 10px 20px; border: none; background: none; cursor: pointer; font-family: inherit; font-size: 14px; font-weight: 500; color: var(--text-sec); transition: color 150ms ease; }
+  .preview-tab.active { color: var(--primary); }
+  /* 预览区扩展样式 */
+  .notice-banner { background:#FFF7ED; border:1px solid #FDBA74; color:#9A3412; border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:12px; line-height:1.6; }
+  .version-badge { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text-sec); background:#F1F5F9; border:1px solid var(--border); border-radius:20px; padding:3px 10px; margin-left:auto; white-space:nowrap; }
+  .edit-toolbar { display:flex; gap:8px; margin-bottom:10px; }
+  .btn-sm { padding:5px 12px; font-size:12px; }
+  /* ===== Misc ===== */
+  h3 { font-size: 16px; font-weight: 600; color: var(--text); margin: 0 0 16px; }
+  details { margin-top: 16px; }
+  details summary { cursor: pointer; font-weight: 500; color: var(--primary); font-size: 14px; padding: 4px 0; transition: color 150ms ease; }
+  details summary:hover { color: var(--primary-hov); }
+  details[open] summary { margin-bottom: 12px; }
+  .panel-title { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
+  .panel-subtitle { color: var(--text-sec); margin-bottom: 24px; font-size: 14px; line-height: 1.5; }
+  .page-list-item { padding: 10px 12px; cursor: pointer; border-bottom: 1px solid var(--border); font-size: 13px; transition: background 150ms ease; border-radius: 4px; margin-bottom: 2px; }
+  .page-list-item:hover { background: var(--primary-lit); }
+  .page-list-item:last-child { margin-bottom: 0; }
+  /* ===== File Tree ===== */
+  .tree-group { margin-bottom: 2px; }
+  .tree-group-header { display: flex; align-items: center; gap: 6px; padding: 8px 10px; cursor: pointer; border-radius: 6px; font-size: 13px; font-weight: 600; color: var(--text); user-select: none; transition: background 150ms ease; }
+  .tree-group-header:hover { background: var(--primary-lit); }
+  .tree-group-header .tree-arrow { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; font-size: 10px; transition: transform 150ms ease; color: var(--text-sec); }
+  .tree-group-header.collapsed .tree-arrow { transform: rotate(-90deg); }
+  .tree-group-header .tree-badge { margin-left: auto; font-size: 11px; color: var(--text-sec); background: #F1F5F9; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
+  .tree-children { overflow: hidden; transition: max-height 300ms ease; }
+  .tree-children.collapsed { max-height: 0 !important; }
+  .tree-leaf { display: flex; align-items: center; gap: 6px; padding: 6px 12px 6px 32px; cursor: pointer; font-size: 13px; border-radius: 4px; transition: background 150ms ease; }
+  .tree-leaf:hover { background: var(--primary-lit); }
+  .tree-leaf.active { background: rgba(37,99,235,0.08); color: var(--primary); font-weight: 500; }
+  .tree-leaf .tree-icon { flex-shrink: 0; font-size: 11px; width: 16px; text-align: center; }
+  .tree-leaf .tree-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tree-leaf .tree-depth-tag { flex-shrink: 0; font-size: 10px; color: var(--text-sec); background: #F8FAFC; padding: 1px 6px; border-radius: 8px; margin-left: auto; }
+  /* ===== Resizable Split ===== */
+  .split-divider { width: 6px; cursor: col-resize; background: transparent; flex-shrink: 0; position: relative; transition: background 150ms ease; border-radius: 3px; }
+  .split-divider:hover, .split-divider.dragging { background: var(--primary-lit); }
+  .split-divider::after { content: ''; position: absolute; top: 0; bottom: 0; left: -3px; right: -3px; } /* wider hit area */
+  /* 全屏预览：覆盖整屏，仍能滚动查看长内容；保留小边距避免贴边 */
+  .preview-panel-fullscreen { position: fixed !important; inset: 12px !important; z-index: 9999 !important; flex: none !important; min-width: 0 !important; max-width: none !important; box-shadow: 0 12px 40px rgba(0,0,0,0.18); }
+  .preview-panel-fullscreen #tabRender,
+  .preview-panel-fullscreen #tabRaw,
+  .preview-panel-fullscreen #tabEdit { min-height: calc(100vh - 140px) !important; }
+  .history-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .history-head h3 { font-size: 16px; font-weight: 600; margin: 0; }
+  .close-btn { background: none; border: none; color: var(--text-sec); cursor: pointer; font-size: 18px; padding: 4px; line-height: 1; transition: color 150ms ease; }
+  .close-btn:hover { color: var(--text); }
+  .drawer-icon { width: 16px; height: 16px; vertical-align: middle; margin-right: 4px; }
+  .icon-btn { background: none; border: none; cursor: pointer; padding: 6px; color: var(--text-sec); transition: color 150ms ease; display: inline-flex; align-items: center; }
+  .icon-btn:hover { color: var(--primary); }
+</style>
+</head>
+<body>
+
+<!-- ===== HEADER ===== -->
+<header style="display:flex;justify-content:space-between;align-items:center;padding:0 24px;height:56px;background:#FFFFFF;border-bottom:1px solid var(--border);">
+  <div style="display:flex;align-items:center;gap:10px;">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"/>
+      <ellipse cx="12" cy="12" rx="4" ry="10"/>
+      <path d="M2 12h20"/>
+    </svg>
+    <span style="font-size:17px;font-weight:600;color:var(--text);">智慧企业数据获取平台</span>
+  </div>
+  <div style="display:flex;align-items:center;gap:12px;">
+    <input id="tokenInput" type="text" placeholder="API Token" style="width:220px;font-size:13px;padding:7px 12px;border-radius:6px;border:1px solid var(--border);background:#F8FAFC;color:var(--text);outline:none;transition:border-color 150ms ease;"
+           onchange="saveToken()" />
+    <button class="btn btn-secondary" style="padding:7px 14px;font-size:13px;" onclick="openKeyMgmt()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:4px;"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+      LLM 配置中心
+    </button>
+    <button class="btn btn-secondary" style="padding:7px 14px;font-size:13px;" onclick="toggleHistory()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:4px;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      历史记录
+    </button>
+  </div>
+</header>
+
+<!-- ===== STEP INDICATOR ===== -->
+<div class="step-indicator" id="stepIndicator">
+  <div class="step-item">
+    <div class="step-dot active" id="stepDot1">1</div>
+    <div class="step-label">填写网址</div>
+  </div>
+  <div class="step-line" id="stepLine1"></div>
+  <div class="step-item">
+    <div class="step-dot" id="stepDot2">2</div>
+    <div class="step-label">配置参数</div>
+  </div>
+  <div class="step-line" id="stepLine2"></div>
+  <div class="step-item">
+    <div class="step-dot" id="stepDot3">3</div>
+    <div class="step-label">爬取执行</div>
+  </div>
+  <div class="step-line" id="stepLine3"></div>
+  <div class="step-item">
+    <div class="step-dot" id="stepDot4">4</div>
+    <div class="step-label">查看结果</div>
+  </div>
+</div>
+
+<!-- ===== STEP 1: URL INPUT ===== -->
+<div class="wizard-panel active" id="panel1">
+  <div style="max-width:600px;margin:60px auto;text-align:center;">
+    <h2 class="panel-title">输入目标网站</h2>
+    <p class="panel-subtitle">输入网址，系统将自动爬取整站内容并生成结构化 HTML 文档</p>
+    <input type="text" id="urlInput" placeholder="请输入目标网站地址，例如 https://www.example.com"
+           style="font-size:16px;text-align:center;" onkeydown="if(event.key==='Enter')goStep2()" oninput="validateUrl()" />
+    <p id="urlError" style="color:var(--error);font-size:13px;margin-top:8px;display:none;">请输入有效的网址（以 http:// 或 https:// 开头）</p>
+    <div id="urlSuggestions" style="margin-top:12px;display:none;"></div>
+    <button class="btn btn-primary" id="btnStep1" style="margin-top:24px;font-size:16px;padding:12px 32px;" disabled onclick="goStep2()">
+      下一步
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+    </button>
+  </div>
+</div>
+
+<!-- ===== STEP 2: CONFIGURATION ===== -->
+<div class="wizard-panel" id="panel2">
+  <div class="card" style="max-width:700px;margin:0 auto;">
+    <h3>站点类型</h3>
+    <div id="siteModeConfig"></div>
+    <h3 style="margin:24px 0 16px;">爬取参数</h3>
+    <div id="paramSliders"></div>
+    <h3 style="margin:24px 0 16px;">选项</h3>
+    <div id="toggleOptions"></div>
+    <h3 style="margin:24px 0 16px;">LLM 智能策略</h3>
+    <div id="llmConfig"></div>
+    <h3 style="margin:24px 0 16px;">数据清洗</h3>
+    <div id="cleanConfig"></div>
+    <details>
+      <summary>高级设置</summary>
+      <div style="margin-top:12px;display:flex;flex-direction:column;gap:12px;" id="advancedConfig"></div>
+    </details>
+    <div style="display:flex;justify-content:space-between;margin-top:24px;">
+      <button class="btn btn-secondary" onclick="goStep1()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+        上一步
+      </button>
+      <button class="btn btn-primary" onclick="goStep3()">
+        开始爬取
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== STEP 3: EXECUTION ===== -->
+<div class="wizard-panel" id="panel3">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+    <!-- Left: Status -->
+    <div class="card">
+      <h3 id="statusLabel" style="margin-bottom:12px;">准备中...</h3>
+      <div style="margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;">
+          <span>已完成</span><span id="pageCounter">0/50 页</span>
+        </div>
+        <div style="height:8px;background:var(--border);border-radius:4px;overflow:hidden;">
+          <div id="progressBar" style="height:100%;width:0%;border-radius:4px;transition:width 0.3s;"></div>
+        </div>
+      </div>
+      <p id="depthInfo" style="font-size:13px;color:var(--text-sec);margin-bottom:12px;"></p>
+      <div id="logContainer" style="max-height:300px;overflow-y:auto;font-family:'SF Mono','Consolas','Liberation Mono',monospace;font-size:13px;"></div>
+      <button class="btn btn-danger" style="margin-top:12px;display:none;" id="btnStop" onclick="stopCrawl()">停止</button>
+    </div>
+    <!-- Right: DAG -->
+    <div class="card">
+      <h3 style="margin-bottom:12px;">流程可视化</h3>
+      <svg id="dagSvg" viewBox="0 0 400 620" style="width:100%;"></svg>
+      <div id="nodeDetails" style="font-size:12px;color:var(--text-sec);margin-top:12px;"></div>
+      <div id="retryLabel" style="display:none;color:var(--warning);font-size:13px;text-align:center;margin-top:8px;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== STEP 4: RESULTS ===== -->
+<div class="wizard-panel" id="panel4">
+  <div id="splitContainer" style="display:flex;height:70vh;gap:0;">
+    <!-- Left: Page List -->
+    <div id="sidebarPanel" class="card" style="width:280px;min-width:180px;max-width:600px;overflow-y:auto;padding:20px;flex-shrink:0;">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:12px;">
+        <span style="padding:5px 10px;font-size:12px;flex-shrink:0;display:flex;align-items:center;gap:4px;color:var(--text-sec);"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> 按栏目层级</span>
+        <div style="position:relative;flex:1;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);pointer-events:none;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" id="pageSearch" placeholder="搜索页面..." style="padding-left:32px;margin-bottom:0;" oninput="filterPages()" />
+        </div>
+      </div>
+      <div id="pageList" style="font-size:13px;"></div>
+      <div id="pageStats" style="font-size:12px;color:var(--text-sec);margin-top:12px;border-top:1px solid var(--border);padding-top:10px;"></div>
+    </div>
+    <!-- Divider -->
+    <div id="splitDivider" class="split-divider"></div>
+    <!-- Right: Markdown Preview -->
+    <div id="previewPanel" class="card" style="flex:1;overflow-y:auto;min-width:300px;">
+      <div style="display:flex;gap:0;margin-bottom:12px;border-bottom:1px solid var(--border);position:sticky;top:0;background:#FFFFFF;z-index:5;padding-top:4px;flex-wrap:wrap;align-items:center;">
+        <div id="cleanModeToggle" style="display:flex;gap:0;margin-right:12px;border:1px solid var(--border);border-radius:6px;overflow:hidden;">
+          <button id="btnModeRaw" onclick="switchCleanMode('raw')" style="padding:6px 14px;border:none;background:var(--primary);color:#fff;cursor:pointer;font-size:12px;font-family:inherit;">原始</button>
+          <button id="btnModeCleaned" onclick="switchCleanMode('cleaned')" style="padding:6px 14px;border:none;background:none;color:var(--text-sec);cursor:pointer;font-size:12px;font-family:inherit;">清洗后</button>
+        </div>
+        <button class="preview-tab active" data-tab="render" onclick="switchTab('render')" style="padding:10px 20px;border:none;background:none;color:var(--primary);cursor:pointer;border-bottom:2px solid var(--primary);font-family:inherit;font-size:14px;font-weight:500;transition:color 150ms ease;">渲染预览</button>
+        <button class="preview-tab" data-tab="raw" onclick="switchTab('raw')" style="padding:10px 20px;border:none;background:none;color:var(--text-sec);cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;font-size:14px;font-weight:500;transition:color 150ms ease;">原始 HTML</button>
+        <button class="preview-tab" data-tab="edit" onclick="switchTab('edit')" style="padding:10px 20px;border:none;background:none;color:var(--text-sec);cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;font-size:14px;font-weight:500;transition:color 150ms ease;">编辑</button>
+        <span id="previewBadge" class="version-badge" style="display:none;"></span>
+        <button id="btnFullscreenPreview" onclick="toggleFullscreenPreview()" title="全屏预览（再点还原）" style="margin-left:auto;padding:6px 10px;border:1px solid var(--border);background:#fff;color:var(--text-sec);cursor:pointer;border-radius:6px;font-family:inherit;font-size:13px;display:inline-flex;align-items:center;gap:4px;transition:all 150ms ease;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+          <span id="btnFullscreenText">全屏</span>
+        </button>
+      </div>
+      <div id="tabRender" class="render-preview" style="min-height:300px;"></div>
+      <div id="tabRaw" style="display:none;min-height:300px;"></div>
+      <div id="editToolbar" class="edit-toolbar" style="display:none;">
+        <button class="btn btn-secondary btn-sm" onclick="undoEdit()">撤销</button>
+        <button class="btn btn-secondary btn-sm" onclick="redoEdit()">重做</button>
+        <button class="btn btn-secondary btn-sm" onclick="formatEdit()">格式化</button>
+        <button class="btn btn-secondary btn-sm" onclick="refreshRenderFromEdit()">刷新预览</button>
+      </div>
+      <div id="tabEdit" style="display:none;min-height:300px;"></div>
+      <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;">
+        <button class="btn btn-secondary" onclick="copyHtml()">复制 HTML</button>
+        <button class="btn btn-secondary" onclick="downloadCurrentPage()">下载此页 .html</button>
+        <button class="btn btn-accent" id="btnSaveEdit" style="display:none;" onclick="saveEdit()">保存修改</button>
+      </div>
+    </div>
+  </div>
+  <!-- 数据库地址栏：导入成功后自动显示，一键复制完整地址 -->
+  <div class="card" id="dbAddrCard" style="margin-top:16px;display:none;">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <span style="font-size:13px;color:var(--text-sec);white-space:nowrap;font-weight:600;">🗄️ 数据库地址</span>
+      <code id="dbAddrText" title="SQLite 数据库文件完整路径" style="flex:1;min-width:200px;padding:6px 10px;background:var(--bg,#f1f5f9);border:1px solid var(--border,#e2e8f0);border-radius:6px;font-size:12.5px;word-break:break-all;user-select:all;"></code>
+      <button class="btn btn-accent btn-sm" onclick="copyDbAddr(this)" style="white-space:nowrap;">复制地址</button>
+      <span id="dbAddrMeta" style="font-size:12px;color:var(--text-sec);white-space:nowrap;"></span>
+      <button class="close-btn" onclick="hideDbAddr()" title="关闭" style="margin-left:auto;">&#10005;</button>
+    </div>
+  </div>
+  <!-- Bottom bar -->
+  <div class="card" style="margin-top:16px;display:flex;justify-content:space-between;align-items:center;">
+    <div id="qualityBar" style="font-size:13px;"></div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;padding:0 4px;white-space:nowrap;" title="只保留详情页（叶子节点）入库，栏目/列表页不导出">
+        <input type="checkbox" id="chkLeafOnly" onchange="WizardState.leaf_only=this.checked;saveWizardState();" />
+        仅叶子节点
+      </label>
+      <button class="btn btn-primary" onclick="downloadAllZip()">下载全部 .zip</button>
+      <button class="btn btn-primary" onclick="exportCsv()">导出 content_001 CSV</button>
+      <button class="btn btn-accent" onclick="importToDb(event)">一键导入数据库</button>
+      <button class="btn btn-secondary" onclick="downloadSummary()">下载统计报告 .json</button>
+      <button class="btn btn-secondary" onclick="startNew()">开始新任务</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== HISTORY DRAWER ===== -->
+<div class="drawer-overlay" id="drawerOverlay" onclick="toggleHistory()"></div>
+<div class="drawer" id="historyDrawer">
+  <div class="history-head">
+    <h3>历史记录</h3>
+    <button onclick="toggleHistory()" class="close-btn">&#10005;</button>
+  </div>
+  <div style="position:relative;margin-bottom:12px;">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);pointer-events:none;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input type="text" id="historySearch" placeholder="搜索历史..." style="padding-left:32px;margin-bottom:0;" oninput="renderHistory()" />
+  </div>
+  <div id="historyList"></div>
+  <button class="btn btn-danger" style="margin-top:16px;width:100%;" onclick="clearHistory()">清空全部历史</button>
+</div>
+
+<script>
+// ==================== SVG ICONS ====================
+function iconSvg(name, size) {
+  let s = size || 16;
+  let w = s, h = s;
+  let svg = (inner) => `<svg width="${w}" height="${h}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;flex-shrink:0;">${inner}</svg>`;
+  switch(name) {
+    case 'check-circle': return `<svg width="${w}" height="${h}" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;flex-shrink:0;"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`;
+    case 'check': return `<svg width="${w}" height="${h}" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;flex-shrink:0;"><polyline points="20 6 9 17 4 12"/></svg>`;
+    case 'x': return `<svg width="${w}" height="${h}" viewBox="0 0 24 24" fill="none" stroke="var(--error)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;flex-shrink:0;"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+    case 'alert-triangle': return `<svg width="${w}" height="${h}" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;flex-shrink:0;"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`;
+    case 'search': return svg(`<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>`);
+    case 'brain': return svg(`<path d="M9.5 2A2.5 2.5 0 0 1 12 4.5V12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-2.5A2.5 2.5 0 0 1 4.5 7H7.17c.38-1.6 1.16-3.04 2.33-5zM14.5 2A2.5 2.5 0 0 0 12 4.5V12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-2.5A2.5 2.5 0 0 0 19.5 7h-2.67c-.38-1.6-1.16-3.04-2.33-5z"/><path d="M12 14v4"/><path d="M9 19h6"/><path d="M12 14c-2 0-3 1-3 3v1h6v-1c0-2-1-3-3-3z"/>`);
+    case 'spider': return svg(`<circle cx="12" cy="12" r="3"/><path d="M12 3v4"/><path d="M12 17v4"/><path d="M3 12h4"/><path d="M17 12h4"/><path d="M5.6 5.6l2.8 2.8"/><path d="M15.6 15.6l2.8 2.8"/><path d="M18.4 5.6l-2.8 2.8"/><path d="M8.4 15.6l-2.8 2.8"/>`);
+    case 'microscope': return svg(`<path d="M6 22h12"/><path d="M12 2v8"/><path d="M7 10h10"/><circle cx="12" cy="15" r="6"/>`);
+    case 'file-text': return svg(`<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>`);
+    case 'folder': return svg(`<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>`);
+    case 'link-icon': return svg(`<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>`);
+    case 'package': return svg(`<path d="M16.5 9.4l-9-5.19M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>`);
+    case 'file': return svg(`<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>`);
+    case 'paperclip': return svg(`<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>`);
+    case 'chevron-down': return svg(`<polyline points="6 9 12 15 18 9"/>`);
+    case 'circle-dot': return `<svg width="${w}" height="${h}" viewBox="0 0 24 24" fill="currentColor" stroke="none" style="vertical-align:middle;flex-shrink:0;"><circle cx="12" cy="12" r="5"/></svg>`;
+    case 'play': return `<svg width="${w}" height="${h}" viewBox="0 0 24 24" fill="currentColor" stroke="none" style="vertical-align:middle;flex-shrink:0;"><polygon points="6 3 20 12 6 21 6 3"/></svg>`;
+    case 'broom': return `<svg width="${w}" height="${h}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;flex-shrink:0;"><path d="M19.36 2.64a2 2 0 0 0-2.83 0L9 10.17l4.83 4.83 7.53-7.53a2 2 0 0 0 0-2.83z"/><path d="M9 10.17L4 15.17a2 2 0 0 0 0 2.83l2.83 2.83a2 2 0 0 0 2.83 0l5-5"/><path d="M3 21h6l-3-3z"/></svg>`;
+    default: return '';
+  }
+}
+function statusIcon(ok) { return iconSvg(ok ? 'check' : 'x'); }
+function verdictIcon(pass) { return iconSvg(pass ? 'check-circle' : 'alert-triangle'); }
+
+// ==================== STATE ====================
+const PARAMS = [
+  {key:'max_depth', label:'爬取深度', def:3, min:1, max:10, step:1},
+  {key:'max_pages', label:'最大页数', def:50, min:5, max:500, step:5},
+  {key:'concurrent', label:'并发数', def:3, min:1, max:10, step:1},
+  {key:'delay', label:'请求间隔 (秒)', def:0.2, min:0, max:5, step:0.1},
+  {key:'timeout', label:'页面超时 (秒)', def:60, min:10, max:300, step:10},
+];
+const TOGGLES = [
+  {key:'use_cache', label:'启用缓存', def:true, tip:''},
+  {key:'same_domain', label:'仅爬取同域名', def:false, tip:'推荐开启'},
+  {key:'exclude_external', label:'排除外部链接', def:false, tip:''},
+];
+const SITE_MODES = [
+  {key:'auto', label:'自动识别', desc:'由探测与 LLM 智能判断'},
+  {key:'static', label:'静态官网', desc:'内容在源码中，快而稳'},
+  {key:'dynamic', label:'动态官网', desc:'JS 渲染/懒加载，等渲染后抓取'},
+];
+// ==================== LLM 供应商注册表 ====================
+// 唯一数据源是服务端 GET /llm/providers（内置 3 家 + 配置中心注册的自定义
+// OpenAI 兼容供应商）。这里只保留离线兜底默认值，运行时被服务端数据覆盖。
+const FALLBACK_PROVIDERS = [
+  {id:'zhipu',    label:'智谱 GLM', builtin:true,  api_key_env:'ZHIPU_API_KEY',    models:['glm-4-flash','glm-5.2','glm-5.1','glm-4','glm-3-turbo']},
+  {id:'deepseek', label:'DeepSeek', builtin:true,  api_key_env:'DEEPSEEK_API_KEY', models:['deepseek-chat','deepseek-reasoner']},
+  {id:'openai',   label:'OpenAI',   builtin:true,  api_key_env:'OPENAI_API_KEY',   models:['gpt-4o','gpt-4o-mini','gpt-4.1-mini']},
+];
+let LLM_PROVIDERS = FALLBACK_PROVIDERS.slice();   // /llm/providers 拉取后覆盖
+let LLM_ACTIVE = {provider:'zhipu', model:'', valid:true};   // 服务端持久化的当前选择
+
+// provider id -> 注册表条目（找不到返回 undefined）
+function getProviderInfo(pid) { return LLM_PROVIDERS.find(p => p.id === pid); }
+
+let WizardState = loadWizardState();
+let history = loadHistory();
+let currentStep = WizardState.currentStep || 1;
+let currentPageMd = {};
+let currentEditPath = null;
+let cmEditor = null;
+let rawEditor = null;
+let editSourceUrl = null;   // cmEditor 当前对应哪一页（防渲染同步串页）
+let previewContent = '';   // 当前预览内容（任意 tab 兜底取用）
+let abortController = null;
+let dagNodeStates = {probe:'waiting', derive:'waiting', crawl:'waiting', validate:'waiting', clean:'waiting', finalize:'waiting'};
+let currentPageMdCleaned = {};   // url -> cleaned md 缓存
+let currentCleanMode = 'raw';    // 'raw' | 'cleaned'
+let cleanedDir = '';
+let cleanStats = null;
+
+// ==================== PERSISTENCE ====================
+function loadWizardState() {
+  try { let d = sessionStorage.getItem('c4ai_wizard_state'); return d ? JSON.parse(d) : {}; }
+  catch(e) { return {}; }
+}
+function saveWizardState() {
+  WizardState.currentStep = currentStep;
+  try { sessionStorage.setItem('c4ai_wizard_state', JSON.stringify(WizardState)); } catch(e) {}
+}
+function loadHistory() {
+  try { let d = localStorage.getItem('c4ai_history'); return d ? JSON.parse(d) : []; }
+  catch(e) { return []; }
+}
+function saveHistory() {
+  try { localStorage.setItem('c4ai_history', JSON.stringify(history)); } catch(e) {}
+}
+
+// ==================== TOKEN ====================
+function getToken() { return document.getElementById('tokenInput').value || sessionStorage.getItem('c4ai_token') || ''; }
+function saveToken() {
+  let t = document.getElementById('tokenInput').value;
+  sessionStorage.setItem('c4ai_token', t);
+}
+
+// ==================== STEP NAVIGATION ====================
+function showStep(n) {
+  currentStep = n;
+  document.querySelectorAll('.wizard-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel'+n).classList.add('active');
+  for (let i=1;i<=4;i++) {
+    let dot = document.getElementById('stepDot'+i);
+    dot.classList.remove('active','done');
+    if (i < n) dot.classList.add('done');
+    if (i === n) dot.classList.add('active');
+    if (i < 4) {
+      let line = document.getElementById('stepLine'+i);
+      line.classList.toggle('done', i < n);
+    }
+  }
+  saveWizardState();
+}
+
+function goStep1() {
+  let url = document.getElementById('urlInput').value.trim();
+  if (url) WizardState.url = url;
+  showStep(1);
+  document.getElementById('urlInput').value = WizardState.url || '';
+  validateUrl();
+}
+
+function goStep2() {
+  let url = document.getElementById('urlInput').value.trim();
+  if (!url || !url.startsWith('http')) return;
+  WizardState.url = url;
+  saveWizardState();
+  showStep(2);
+}
+
+function goStep3() {
+  collectConfig();
+  saveWizardState();
+  showStep(3);
+  startCrawl();
+}
+
+function goStep4() {
+  showStep(4);
+  loadResults();
+}
+
+// ==================== URL VALIDATION ====================
+function validateUrl() {
+  let url = document.getElementById('urlInput').value.trim();
+  let valid = url.startsWith('http://') || url.startsWith('https://');
+  document.getElementById('btnStep1').disabled = !valid;
+  document.getElementById('urlError').style.display = (url && !valid) ? 'block' : 'none';
+  document.getElementById('urlInput').classList.toggle('error', url.length > 0 && !valid);
+}
+
+// ==================== CONFIG UI ====================
+function renderModeCards() {
+  let mode = WizardState.site_mode || 'auto';
+  document.getElementById('siteModeConfig').innerHTML = `
+    <div class="mode-grid">
+      ${SITE_MODES.map(m => `
+        <div class="mode-card ${m.key===mode?'active':''}" onclick="onModeSelect('${m.key}')">
+          <div class="mode-title">${m.label}</div>
+          <div class="mode-desc">${m.desc}</div>
+        </div>`).join('')}
+    </div>
+    <div class="mode-hint" id="modeHint">${modeHintText(mode)}</div>`;
+}
+
+function modeHintText(mode) {
+  if (mode === 'static') return '静态官网：自动缩短页面超时、提高并发，并禁用 JS 交互步骤（scroll/click），适合内容直接写在 HTML 源码中的站点。';
+  if (mode === 'dynamic') return '动态官网：自动拉长页面超时、降低并发，开启全页滚动扫描以触发懒加载/无限滚动内容，适合 React/Vue 等 JS 渲染站点。';
+  return '自动识别：不做预设，由探测节点和 LLM 共同决定最优参数。';
+}
+
+function onModeSelect(mode) {
+  WizardState.site_mode = mode;
+  // 智能联动调参：让滑杆默认值与会话模式匹配（后端仍有护栏兜底）
+  if (mode === 'static') { setParam('timeout', 30); setParam('concurrent', 5); }
+  else if (mode === 'dynamic') { setParam('timeout', 90); setParam('concurrent', 3); }
+  renderModeCards();
+  saveWizardState();
+}
+
+function setParam(key, val) {
+  WizardState[key] = val;
+  let slider = document.getElementById('slider_'+key);
+  let num = document.getElementById('num_'+key);
+  let label = document.getElementById('val_'+key);
+  if (slider) slider.value = val;
+  if (num) num.value = val;
+  if (label) label.textContent = val;
+}
+
+// 与后端 build_run_config 的护栏规则保持一致
+function applyModeClamps() {
+  let mode = WizardState.site_mode || 'auto';
+  if (mode === 'static') {
+    if (WizardState.timeout > 30) setParam('timeout', 30);
+    if (WizardState.concurrent < 5) setParam('concurrent', 5);
+  } else if (mode === 'dynamic') {
+    if (WizardState.timeout < 90) setParam('timeout', 90);
+    if (WizardState.concurrent > 4) setParam('concurrent', 4);
+  }
+}
+
+function buildConfigUI() {
+  // 站点类型模式
+  renderModeCards();
+
+  // Params
+  let slidersHtml = '';
+  PARAMS.forEach(p => {
+    let v = WizardState[p.key] !== undefined ? WizardState[p.key] : p.def;
+    slidersHtml += `<div style="margin-bottom:12px;">
+      <div style="display:flex;justify-content:space-between;font-size:13px;">
+        <span>${p.label}</span><span id="val_${p.key}">${v}</span>
+      </div>
+      <div style="display:flex;gap:12px;align-items:center;">
+        <input type="range" class="slider" id="slider_${p.key}" min="${p.min}" max="${p.max}" step="${p.step}" value="${v}"
+               oninput="syncSlider('${p.key}')" />
+        <input type="number" id="num_${p.key}" value="${v}" min="${p.min}" max="${p.max}" step="${p.step}"
+               style="width:80px;text-align:center;" onchange="syncNum('${p.key}')" />
+      </div>
+    </div>`;
+  });
+  document.getElementById('paramSliders').innerHTML = slidersHtml;
+
+  // Toggles
+  let togglesHtml = '';
+  TOGGLES.forEach(t => {
+    let v = WizardState[t.key] !== undefined ? WizardState[t.key] : t.def;
+    togglesHtml += `<label style="display:flex;align-items:center;gap:12px;margin-bottom:12px;cursor:pointer;">
+      <span style="font-size:13px;">${t.label}</span>
+      ${t.tip ? `<span style="font-size:11px;color:var(--warning);">${t.tip}</span>` : ''}
+      <span class="toggle-switch"><input type="checkbox" id="toggle_${t.key}" ${v?'checked':''} onchange="WizardState['${t.key}']=this.checked;saveWizardState();" /><span class="toggle-slider"></span></span>
+    </label>`;
+  });
+  document.getElementById('toggleOptions').innerHTML = togglesHtml;
+
+  // LLM
+  let useLlm = WizardState.use_llm !== undefined ? WizardState.use_llm : true;
+  let provider = WizardState.provider || 'zhipu';
+  let model = WizardState.model || '';
+  let pInfo = getProviderInfo(provider) || LLM_PROVIDERS[0];
+  provider = pInfo.id;   // 注册表里已删除的 provider 回退到第一个
+  document.getElementById('llmConfig').innerHTML = `
+    <label style="display:flex;align-items:center;gap:12px;margin-bottom:12px;cursor:pointer;">
+      <span style="font-size:13px;">启用 LLM 智能策略</span>
+      <span class="toggle-switch"><input type="checkbox" id="toggle_llm" ${useLlm?'checked':''} onchange="WizardState.use_llm=this.checked;saveWizardState();toggleLlmFields()" /><span class="toggle-slider"></span></span>
+    </label>
+    <div id="llmFields" style="display:${useLlm?'flex':'none'};gap:12px;flex-wrap:wrap;align-items:center;">
+      <select id="selProvider" onchange="onProviderChange()" style="flex:1;min-width:120px;">
+        ${LLM_PROVIDERS.map(p => `<option value="${_esc(p.id)}" ${p.id===provider?'selected':''}>${_esc(p.label || p.id)}${p.builtin?'':'（自定义）'}</option>`).join('')}
+      </select>
+      <input list="llmModelList" id="selModel" value="${_esc(model)}" placeholder="模型名（可自由输入）"
+             onchange="onModelChange()" style="flex:1;min-width:140px;" />
+      <datalist id="llmModelList">
+        ${(pInfo.models||[]).map(m => `<option value="${_esc(m)}"></option>`).join('')}
+      </datalist>
+      <span id="llmKeyStatus" style="font-size:12px;white-space:nowrap;"></span>
+      <button class="btn btn-sm btn-secondary" onclick="openKeyMgmt()">配置中心</button>
+    </div>`;
+
+  // Advanced
+  document.getElementById('advancedConfig').innerHTML = `
+    <div style="display:flex;gap:12px;align-items:center;">
+      <span style="font-size:13px;white-space:nowrap;">输出目录:</span>
+      <input type="text" id="advOutput" value="${WizardState.output||'crawl_output'}" onchange="WizardState.output=this.value;saveWizardState();" />
+    </div>`;
+
+  // 数据清洗配置
+  let enableCleaning = WizardState.enable_cleaning !== undefined ? WizardState.enable_cleaning : true;
+  let cleaningMode = WizardState.cleaning_mode || 'standard';
+  let keepImages = WizardState.keep_images !== undefined ? WizardState.keep_images : true;
+  let cleaningBatchSize = WizardState.cleaning_batch_size ?? 20;
+  let cleanDiv = document.getElementById('cleanConfig');
+  if (cleanDiv) {
+    cleanDiv.innerHTML = `
+      <label style="display:flex;align-items:center;gap:12px;margin-bottom:12px;cursor:pointer;">
+        <span style="font-size:13px;">启用 LLM 数据清洗</span>
+        <span class="toggle-switch"><input type="checkbox" id="toggle_cleaning" ${enableCleaning?'checked':''} onchange="WizardState.enable_cleaning=this.checked;saveWizardState();toggleCleaningFields();" /><span class="toggle-slider"></span></span>
+      </label>
+      <div style="display:${enableCleaning?'flex':'none'};gap:12px;align-items:center;margin-bottom:12px;" id="cleaningModeRow">
+        <span style="font-size:13px;white-space:nowrap;">清洗模式:</span>
+        <select id="selCleaningMode" onchange="WizardState.cleaning_mode=this.value;saveWizardState();" style="flex:1;">
+          <option value="conservative" ${cleaningMode==='conservative'?'selected':''}>保守（仅删导航/页脚）</option>
+          <option value="standard" ${cleaningMode==='standard'?'selected':''}>标准（删联系方式+链接）</option>
+          <option value="aggressive" ${cleaningMode==='aggressive'?'selected':''}>激进（仅提取核心正文）</option>
+        </select>
+      </div>
+      <div id="batchSizeRow" style="display:${enableCleaning?'flex':'none'};gap:12px;align-items:center;margin-bottom:12px;">
+        <span style="font-size:13px;white-space:nowrap;">清洗并发数:</span>
+        <input type="number" id="num_cleaning_batch_size" min="1" step="1" value="${cleaningBatchSize}" onchange="onCleaningBatchChange(this.value)" style="width:80px;" />
+        <span style="font-size:11px;color:var(--text-sec);">（智谱 GLM 系列不限并发，仅限 QPS；建议 20 起步，按本地资源上调）</span>
+      </div>
+      <label id="keepImagesRow" style="display:${enableCleaning?'flex':'none'};align-items:center;gap:12px;cursor:pointer;">
+        <span style="font-size:13px;">保留相关图片</span>
+        <span style="font-size:11px;color:var(--text-sec);">（LLM 判断图片与内容的相关性）</span>
+        <span class="toggle-switch"><input type="checkbox" id="toggle_keep_images" ${keepImages?'checked':''} onchange="WizardState.keep_images=this.checked;saveWizardState();" /><span class="toggle-slider"></span></span>
+      </label>`;
+  }
+
+  // 初始化：拉取服务端持久化的 provider/model 配置，并刷新 key 状态
+  loadLlmServerConfig();
+  loadLlmKeyStatus();
+}
+
+function onCleaningBatchChange(v) {
+  let n = parseInt(v);
+  if (!Number.isFinite(n) || n < 1) n = 1;
+  WizardState.cleaning_batch_size = n;
+  saveWizardState();
+  let el = document.getElementById('num_cleaning_batch_size');
+  if (el) el.value = n;
+}
+
+function syncSlider(key) {
+  let v = parseFloat(document.getElementById('slider_'+key).value);
+  document.getElementById('num_'+key).value = v;
+  document.getElementById('val_'+key).textContent = v;
+  WizardState[key] = v;
+  saveWizardState();
+}
+
+function syncNum(key) {
+  let v = parseFloat(document.getElementById('num_'+key).value);
+  let slider = document.getElementById('slider_'+key);
+  if (v < parseFloat(slider.min)) v = parseFloat(slider.min);
+  if (v > parseFloat(slider.max)) v = parseFloat(slider.max);
+  slider.value = v;
+  document.getElementById('val_'+key).textContent = v;
+  WizardState[key] = v;
+  saveWizardState();
+}
+
+function toggleLlmFields() {
+  document.getElementById('llmFields').style.display = WizardState.use_llm ? 'flex' : 'none';
+}
+
+function toggleCleaningFields() {
+  let enabled = WizardState.enable_cleaning;
+  let modeRow = document.getElementById('cleaningModeRow');
+  let imagesRow = document.getElementById('keepImagesRow');
+  let batchRow = document.getElementById('batchSizeRow');
+  if (modeRow) modeRow.style.display = enabled ? 'flex' : 'none';
+  if (imagesRow) imagesRow.style.display = enabled ? 'flex' : 'none';
+  if (batchRow) batchRow.style.display = enabled ? 'flex' : 'none';
+}
+
+function onProviderChange() {
+  let p = document.getElementById('selProvider').value;
+  WizardState.provider = p;
+  // provider 变了，环境变量名从注册表取（内置->ZHIPU_API_KEY 等，自定义->LLMKEY_*）
+  let info = getProviderInfo(p);
+  WizardState.api_key_env = (info && info.api_key_env) || '';
+  // 更新模型建议列表；当前模型不在新供应商建议里时切到首个建议
+  let sel = document.getElementById('selModel');
+  if (sel) {
+    let models = (info && info.models) || [];
+    let dl = document.getElementById('llmModelList');
+    if (dl) dl.innerHTML = models.map(m => `<option value="${_esc(m)}"></option>`).join('');
+    if (models.length && !models.includes(sel.value)) sel.value = models[0];
+    WizardState.model = sel.value;
+  }
+  saveWizardState();
+  saveLlmServerConfig();
+  loadLlmKeyStatus();
+}
+
+// 模型切换（自由输入框）：持久化到服务端
+function onModelChange() {
+  let sel = document.getElementById('selModel');
+  if (!sel) return;
+  WizardState.model = sel.value.trim();
+  saveWizardState();
+  saveLlmServerConfig();
+}
+
+// ==================== LLM KEY 状态 + 持久化配置 ====================
+// 拉取服务端统一注册表（内置+自定义供应商），同步下拉与状态点
+async function loadLlmProviders() {
+  let token = getToken();
+  try {
+    let resp = await fetch('/llm/providers', { headers: token ? {'Authorization':'Bearer '+token} : {} });
+    if (!resp.ok) return null;
+    let data = await resp.json();
+    if (data && Array.isArray(data.providers) && data.providers.length) {
+      LLM_PROVIDERS = data.providers;
+      LLM_ACTIVE = {provider: data.active_provider, model: data.active_model, valid: data.active_provider_valid !== false};
+    }
+    return data;
+  } catch (e) { return null; }
+}
+
+// 当前 provider 的「已配置/未配置」状态点（数据来自 /llm/providers）
+function loadLlmKeyStatus() {
+  let provider = WizardState.provider || (document.getElementById('selProvider')?.value) || 'zhipu';
+  let statusEl = document.getElementById('llmKeyStatus');
+  if (!statusEl) return;
+  let info = getProviderInfo(provider);
+  let token = getToken();
+  statusEl.innerHTML = '<span style="color:var(--text-light);">加载中...</span>';
+  fetch('/llm/providers', { headers: token ? {'Authorization':'Bearer '+token} : {} })
+    .then(r => r.ok ? r.json() : Promise.reject('加载失败'))
+    .then(d => {
+      let row = (d.providers || []).find(p => p.id === provider);
+      if (!row) {
+        statusEl.innerHTML = '<span style="color:var(--warning);">○ 未知供应商</span>';
+        return;
+      }
+      if (row.has_key) {
+        statusEl.innerHTML = '<span style="color:var(--success);">● Key 已配置</span>';
+      } else {
+        statusEl.innerHTML = '<span style="color:var(--warning);">○ 未配置 Key（点「配置中心」）</span>';
+      }
+    })
+    .catch(() => { statusEl.innerHTML = '<span style="color:var(--text-light);">○ 状态未知</span>'; });
+}
+
+// 从服务端拉取持久化的 provider/model（配置一次，跨会话/浏览器生效）
+async function loadLlmServerConfig() {
+  await loadLlmProviders();
+  // 服务端 active 与本地不同步时以服务端为准（配置中心保存过即全局生效）
+  if (LLM_ACTIVE.provider && getProviderInfo(LLM_ACTIVE.provider)) {
+    WizardState.provider = LLM_ACTIVE.provider;
+    if (LLM_ACTIVE.model) WizardState.model = LLM_ACTIVE.model;
+  } else if (WizardState.provider && !getProviderInfo(WizardState.provider)) {
+    // 本地存的 provider 已被删除，回退默认
+    WizardState.provider = LLM_PROVIDERS[0].id;
+    WizardState.model = '';
+  }
+  let info = getProviderInfo(WizardState.provider);
+  if (info) WizardState.api_key_env = info.api_key_env || '';
+  let selP = document.getElementById('selProvider');
+  let selM = document.getElementById('selModel');
+  if (selP) {
+    selP.innerHTML = LLM_PROVIDERS.map(p => `<option value="${_esc(p.id)}" ${p.id===WizardState.provider?'selected':''}>${_esc(p.label || p.id)}${p.builtin?'':'（自定义）'}</option>`).join('');
+  }
+  if (selM) {
+    selM.value = WizardState.model || '';
+    let dl = document.getElementById('llmModelList');
+    if (dl) dl.innerHTML = ((info && info.models) || []).map(m => `<option value="${_esc(m)}"></option>`).join('');
+  }
+  saveWizardState();
+  loadLlmKeyStatus();
+}
+
+// 把当前 provider/model 持久化到服务端
+async function saveLlmServerConfig() {
+  let token = getToken();
+  let provider = WizardState.provider || 'zhipu';
+  let model = WizardState.model || '';
+  try {
+    await fetch('/llm/config', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json', ...(token ? {'Authorization':'Bearer '+token} : {})},
+      body: JSON.stringify({ active_provider: provider, active_model: model }),
+    });
+  } catch (e) { /* 保存失败不阻塞 */ }
+}
+
+function collectConfig() {
+  PARAMS.forEach(p => {
+    WizardState[p.key] = parseFloat(document.getElementById('slider_'+p.key)?.value) || p.def;
+  });
+  // 站点模式护栏：与后端 build_run_config 保持一致，避免滑杆显示与实际执行值不符
+  applyModeClamps();
+  WizardState.output = document.getElementById('advOutput')?.value || 'crawl_output';
+  // api_key_env 由 provider 从注册表自动决定（内置/自定义），不让用户手填
+  let _p = WizardState.provider || document.getElementById('selProvider')?.value || 'zhipu';
+  let _info = getProviderInfo(_p);
+  WizardState.api_key_env = (_info && _info.api_key_env) || 'ZHIPU_API_KEY';
+  // 模型为自由输入框，读一次最新值
+  let _mEl = document.getElementById('selModel');
+  if (_mEl && _mEl.value.trim()) WizardState.model = _mEl.value.trim();
+  if (WizardState.use_llm === undefined) WizardState.use_llm = true;
+  // 数据清洗配置
+  WizardState.enable_cleaning = document.getElementById('toggle_cleaning')?.checked ?? true;
+  WizardState.cleaning_mode = document.getElementById('selCleaningMode')?.value || 'standard';
+  WizardState.keep_images = document.getElementById('toggle_keep_images')?.checked ?? true;
+  let _bs = parseInt(document.getElementById('num_cleaning_batch_size')?.value);
+  WizardState.cleaning_batch_size = Number.isFinite(_bs) && _bs >= 1 ? _bs : 20;
+  saveWizardState();
+}
+
+// ==================== CRAWL EXECUTION ====================
+let pageResults = [];
+let crawlMetrics = null;
+
+async function startCrawl() {
+  collectConfig();
+  abortController = new AbortController();
+  pageResults = [];
+  crawlMetrics = null;
+  currentPageMdCleaned = {};
+  cleanedDir = '';
+  cleanStats = null;
+  currentCleanMode = 'raw';
+  dagNodeStates = {probe:'waiting', derive:'waiting', crawl:'waiting', validate:'waiting', clean:'waiting', finalize:'waiting'};
+
+  document.getElementById('logContainer').innerHTML = '';
+  document.getElementById('progressBar').style.width = '0%';
+  document.getElementById('pageCounter').textContent = '0/'+(WizardState.max_pages||50)+' 页';
+  document.getElementById('statusLabel').textContent = '连接中...';
+  document.getElementById('depthInfo').textContent = '';
+  document.getElementById('retryLabel').style.display = 'none';
+  document.getElementById('nodeDetails').textContent = '';
+  renderDag();
+
+  let token = getToken();
+  let body = {
+    url: WizardState.url,
+    provider: WizardState.provider || 'zhipu',
+    // 模型空时兜底：当前供应商的首个建议模型，最后才退 glm-4-flash
+    model: WizardState.model || ((getProviderInfo(WizardState.provider) || {}).models || [])[0] || 'glm-4-flash',
+    api_key_env: WizardState.api_key_env || 'ZHIPU_API_KEY',
+    max_depth: WizardState.max_depth || 3,
+    max_pages: WizardState.max_pages || 50,
+    concurrent: WizardState.concurrent || 3,
+    delay: WizardState.delay || 0.2,
+    timeout: WizardState.timeout || 60,
+    output: WizardState.output || 'crawl_output',
+    no_cache: !(WizardState.use_cache ?? true),
+    enable_cleaning: WizardState.enable_cleaning ?? true,
+    cleaning_mode: WizardState.cleaning_mode || 'standard',
+    keep_images: WizardState.keep_images ?? true,
+    cleaning_batch_size: WizardState.cleaning_batch_size ?? 20,
+    site_mode: WizardState.site_mode || 'auto',
+  };
+
+  try {
+    let headers = {'Content-Type':'application/json'};
+    if (token) headers['Authorization'] = 'Bearer '+token;
+    let resp = await fetch('/orchestrator/stream', {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(body),
+      signal: abortController.signal,
+    });
+    if (!resp.ok) {
+      let detail = resp.statusText;
+      try { let j = await resp.json(); detail = j.detail || j.message || detail; } catch(_) {}
+      if (resp.status === 501) throw new Error('后端服务未启动，请先运行 docker compose up 或启动 API 服务');
+      throw new Error(detail);
+    }
+
+    let reader = resp.body.getReader();
+    let decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      let {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream:true});
+      let lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (let line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            let evt = JSON.parse(line.slice(6));
+            handleSseEvent(evt);
+          } catch(e) {}
+        }
+      }
+    }
+  } catch(e) {
+    if (e.name !== 'AbortError') {
+      document.getElementById('statusLabel').textContent = '错误: '+e.message;
+      addLog('❌ '+esc(e.message), 'error');
+    }
+  }
+}
+
+function handleSseEvent(evt) {
+  switch(evt.type) {
+    case 'node_start':
+      setNodeState(evt.node, 'running');
+      moveFlowDot(evt.node);
+      updateStatusLabel(evt.node);
+      break;
+    case 'node_end':
+      setNodeState(evt.node, (evt.state && evt.state.error) ? 'error' : 'done');
+      if (evt.state) {
+        updateNodeDetails(evt.node, evt.state);
+      }
+      if (evt.node === 'clean' && evt.state) {
+        cleanedDir = evt.state.cleaned_dir || '';
+        cleanStats = evt.state.clean_stats || null;
+      }
+      if (evt.node === 'finalize') {
+        document.getElementById('statusLabel').innerHTML = verdictIcon(true) + ' 完成';
+        crawlMetrics = evt.state;
+        WizardState.finalState = evt.state;
+        saveWizardState();
+        setTimeout(goStep4, 800);
+      }
+      break;
+    case 'page_crawled':
+      // 兜底：重试换轮后 result_dir 变化（新轮次目录），旧轮记录指向已被
+      // 删除的目录（crawl 节点重爬前 rmtree 旧 result_dir）。旧代码 retry 事件
+      // 未发出导致这里不清空 → 前端点击旧记录 404。检测到目录切换即清空。
+      if (pageResults.length > 0 && evt.result_dir && pageResults[0].result_dir
+          && evt.result_dir !== pageResults[0].result_dir) {
+        pageResults = [];
+        currentPageMd = {};
+        document.getElementById('pageCounter').textContent = '0/'+(WizardState.max_pages||50)+' 页';
+      }
+      pageResults.push(evt);
+      let max = WizardState.max_pages || 50;
+      let pct = Math.min(100, Math.round((evt.page_count / max) * 100));
+      document.getElementById('progressBar').style.width = pct+'%';
+      document.getElementById('pageCounter').textContent = evt.page_count+'/'+max+' 页';
+      document.getElementById('depthInfo').textContent = '深度: 第 '+(evt.depth||0)+' 层';
+      let statusIconHtml = statusIcon(evt.success);
+      let cls = evt.success ? 'success' : 'error';
+      addLog(statusIconHtml+' '+esc(evt.url)+' — '+(evt.status_code||'?')+' — '+esc((evt.title||'').slice(0,30)), cls);
+      break;
+    case 'cleaning_progress':
+      let cleanMax = cleanStats?.total || evt.total || 0;
+      let cleanPct = cleanMax > 0 ? Math.min(100, Math.round((evt.current / cleanMax) * 100)) : 0;
+      document.getElementById('progressBar').style.width = cleanPct+'%';
+      document.getElementById('pageCounter').textContent = '清洗 '+evt.current+'/'+cleanMax+' 文件';
+      let cleanIcon = evt.status==='cleaned'?'✅':evt.status==='partial'?'🟡':evt.status==='skipped'?'⏭️':'❌';
+      let cleanMsg = (evt.message ? ' — '+esc(evt.message) : '');
+      addLog(cleanIcon+' '+esc(evt.file)+' — '+evt.status+cleanMsg, evt.status==='failed'?'error':'success');
+      break;
+    case 'retry':
+      // 重试开始：重置页面列表，避免新轮次与旧轮次重复
+      pageResults = [];
+      currentPageMd = {};
+      document.getElementById('pageCounter').textContent = '0/'+(WizardState.max_pages||50)+' 页';
+      document.getElementById('progressBar').style.width = '0%';
+      document.getElementById('retryLabel').style.display = 'block';
+      document.getElementById('retryLabel').textContent = '第 '+evt.attempt+'/2 轮 — 上次内容过少，正在换策略重试...';
+      break;
+    case 'error':
+      addLog('❌ '+esc(evt.message), 'error');
+      document.getElementById('statusLabel').textContent = '错误';
+      break;
+    case 'done':
+      // done 事件携带 status：success / failed。
+      // 后端 stream_graph 曾静默吞异常导致 pumper 死亡仍发"成功"——前端误报完成。
+      // 现在 failed 时明确标红，不显示"完成"。
+      if (evt.status === 'failed') {
+        document.getElementById('statusLabel').innerHTML = '<span style="color:var(--danger);">❌ 爬取异常终止</span>';
+        addLog('❌ 爬取流程异常终止（图执行中断）', 'error');
+      }
+      break;
+  }
+}
+
+function updateStatusLabel(node) {
+  let map = {probe:iconSvg('search',14)+' 探测网站信息...', derive:iconSvg('brain',14)+' 生成爬取策略...', crawl:iconSvg('spider',14)+' 正在爬取页面...', validate:iconSvg('microscope',14)+' 校验内容质量...', clean:iconSvg('broom',14)+' 正在清洗内容...', finalize:iconSvg('file-text',14)+' 生成报告...'};
+  document.getElementById('statusLabel').innerHTML = map[node] || node;
+}
+
+function updateNodeDetails(node, state) {
+  let container = document.getElementById('nodeDetails');
+  let html = '';
+  if (node === 'probe' && state.probe) {
+    let modeLabel = {auto:'自动识别', static:'静态官网', dynamic:'动态官网'}[state.probe.site_mode] || '自动识别';
+    html = `模式: ${modeLabel} | 状态码: ${state.probe.status_code||'?'} | 编码: ${esc(state.probe.encoding||'?')} | SPA: ${state.probe.is_spa_likely?'是':'否'} | Robots: ${state.probe.robots_forbidden?'禁止':'允许'}`;
+    if (state.probe.mode_conflict) {
+      html = `<span style="color:var(--warning);">注意: ${esc(state.probe.mode_conflict)}</span><br>` + html;
+    }
+  } else if (node === 'derive' && state.strategy) {
+    html = `过滤器: ${esc(state.strategy.content_filter||'?')} | 裁剪阈值: ${state.strategy.pruning_threshold||'?'} | 全页扫描: ${state.strategy.scan_full_page?'是':'否'} | JS步骤: ${(state.strategy.js_steps||[]).length} 个`;
+  } else if (node === 'crawl') {
+    html = `已爬取 ${state.page_count||0} 页`;
+  } else if (node === 'validate' && state.metrics) {
+    html = `非空率: ${(state.metrics.non_empty_ratio*100).toFixed(0)}% | 噪点比: ${(state.metrics.noise_ratio*100).toFixed(0)}% | 编码: ${state.metrics.encoding_ok?'OK':'异常'}`;
+    if (state.verdict === 'pass') html += ' ' + verdictIcon(true);
+    else html += ' ' + verdictIcon(false) + ' ' + esc(state.feedback||'');
+  } else if (node === 'clean') {
+    let cs = state.clean_stats || {};
+    if (cs.error) {
+      html = `清洗出错: ${esc(cs.error)}`;
+    } else if (cs.total !== undefined) {
+      html = `清洗 ${cs.cleaned||0} 成功 / ${cs.partial||0} 部分 / ${cs.skipped||0} 跳过 / ${cs.failed||0} 失败`;
+    } else {
+      html = '清洗未执行';
+    }
+  } else if (node === 'finalize') {
+    html = `需复核: ${state.needs_review?'是':'否'} | 输出: ${esc(state.result_dir||'?')}`;
+  }
+  container.innerHTML = html;
+}
+
+// 转义 HTML 特殊字符，防注入：动态字符串（URL/标题/错误信息等）进 innerHTML 前必须走这里。
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function addLog(msg, cls) {
+  let div = document.getElementById('logContainer');
+  div.innerHTML = `<div class="log-entry ${cls||''}">${msg}</div>` + div.innerHTML;
+  // Keep max 50 entries
+  while (div.children.length > 50) div.lastChild.remove();
+}
+
+function stopCrawl() {
+  if (abortController) abortController.abort();
+  document.getElementById('statusLabel').textContent = '已停止';
+}
+
+// ==================== DAG RENDERING ====================
+const DAG_NODES = [
+  {id:'probe', label:'探针', x:200, y:50},
+  {id:'derive', label:'策略', x:200, y:150},
+  {id:'crawl', label:'爬取', x:200, y:270},
+  {id:'validate', label:'校验', x:200, y:390},
+  {id:'clean', label:'清洗', x:200, y:490},
+  {id:'finalize', label:'收尾', x:200, y:590},
+];
+const DAG_EDGES = [['probe','derive'], ['derive','crawl'], ['crawl','validate'], ['validate','clean'], ['clean','finalize']];
+let dagEls = {};
+
+// 只构建一次静态 SVG（连线/节点/标签 + 常驻光点）；之后状态变化只做补丁
+function renderDag() {
+  let svg = document.getElementById('dagSvg');
+  let edges = DAG_EDGES.map(([from,to]) => {
+    let fn = DAG_NODES.find(n=>n.id===from), tn = DAG_NODES.find(n=>n.id===to);
+    if (!fn || !tn) return '';
+    return `<path data-edge="${from}-${to}" d="M${fn.x},${fn.y+16} L${tn.x},${tn.y-16}" class="dag-edge" />`;
+  }).join('\n');
+  let rects = DAG_NODES.map(n => `<rect data-node="${n.id}" x="${n.x-48}" y="${n.y-16}" width="96" height="32" class="dag-node waiting" />`).join('\n');
+  let labels = DAG_NODES.map(n => `<text data-node="${n.id}" x="${n.x}" y="${n.y+5}" text-anchor="middle" fill="#94A3B8" font-size="12" font-family="Inter,Segoe UI,system-ui,sans-serif">${n.label}</text>`).join('\n');
+  svg.innerHTML = edges + rects + labels +
+    `<circle id="flowDot" cx="0" cy="0" r="6" style="transform:translate(${DAG_NODES[0].x}px,${DAG_NODES[0].y-16}px)" />`;
+  dagEls = {};
+  DAG_NODES.forEach(n => {
+    dagEls[n.id] = {
+      rect: svg.querySelector('rect[data-node="'+n.id+'"]'),
+      text: svg.querySelector('text[data-node="'+n.id+'"]'),
+      label: n.label,
+    };
+  });
+  DAG_EDGES.forEach(([from, to]) => {
+    dagEls[from].edge = svg.querySelector('path[data-edge="'+from+'-'+to+'"]');
+  });
+}
+
+// 状态补丁：只更新单个节点（矩形/标签/入边），不重建整张图 → 光点稳定存活
+function setNodeState(node, status) {
+  dagNodeStates[node] = status;
+  let els = dagEls[node];
+  if (!els) return;
+  let color = {done:'#059669', running:'#2563EB', skipped:'#D97706', error:'#DC2626', waiting:'#CBD5E1'}[status] || '#CBD5E1';
+  let fill = {done:'rgba(5,150,105,0.08)', running:'rgba(37,99,235,0.08)', skipped:'rgba(217,119,6,0.08)', error:'rgba(220,38,38,0.08)'}[status] || '#FFFFFF';
+  els.rect.setAttribute('class', 'dag-node ' + status);
+  els.rect.setAttribute('fill', fill);
+  els.rect.setAttribute('stroke', color);
+  let prefix = status==='done' ? iconSvg('check',12)+' ' : status==='running' ? iconSvg('circle-dot',10)+' ' : '';
+  els.text.setAttribute('fill', status==='waiting' ? '#94A3B8' : '#1E293B');
+  els.text.innerHTML = prefix + els.label;
+  // 指向本节点的入边：仅当本节点 running 时点亮 marching-ants 流向
+  let pred = DAG_EDGES.find(e => e[1]===node);
+  if (pred && dagEls[pred[0]] && dagEls[pred[0]].edge) {
+    dagEls[pred[0]].edge.setAttribute('class', status==='running' ? 'dag-edge active' : 'dag-edge');
+  }
+}
+
+// 光点沿连线滑到目标节点的入口（y-16 即入边终点）
+function moveFlowDot(node) {
+  let n = DAG_NODES.find(x => x.id === node);
+  let dot = document.getElementById('flowDot');
+  if (n && dot) dot.style.transform = `translate(${n.x}px, ${n.y-16}px)`;
+}
+
+// ==================== RESULTS ====================
+function loadResults() {
+  // 清洗后 toggle 仅在清洗真实产出了文件（total>0）时才显示
+  let hasCleaned = cleanedDir && cleanStats && cleanStats.total > 0;
+  let toggle = document.getElementById('cleanModeToggle');
+  if (toggle) toggle.style.display = hasCleaned ? 'flex' : 'none';
+  // 无清洗结果时强制回到 raw 模式
+  if (!hasCleaned && currentCleanMode === 'cleaned') {
+    currentCleanMode = 'raw';
+    let btnRaw = document.getElementById('btnModeRaw');
+    let btnCleaned = document.getElementById('btnModeCleaned');
+    if (btnRaw) { btnRaw.style.background = 'var(--primary)'; btnRaw.style.color = '#fff'; }
+    if (btnCleaned) { btnCleaned.style.background = 'none'; btnCleaned.style.color = 'var(--text-sec)'; }
+  }
+  renderPageList();
+  if (pageResults.length > 0) selectPage(pageResults[0]);
+  updateQualityBar();
+  // 异步拉取栏目层级（ywlx），树视图按数据库层级展示
+  loadYwlxClassification();
+}
+
+function renderPageList(filter) {
+  let div = document.getElementById('pageList');
+  let filtered = pageResults;
+  if (filter) {
+    let q = filter.toLowerCase();
+    filtered = pageResults.filter(p => p.url.toLowerCase().includes(q) || (p.title||'').toLowerCase().includes(q));
+  }
+  if (filtered.length === 0) {
+    div.innerHTML = '<p style="color:var(--text-sec);">暂无页面</p>';
+    return;
+  }
+
+  if (pageYwlx) {
+    renderYwlxTree(div, filtered);
+  } else if (treeMode === 'depth') {
+    renderDepthTree(div, filtered);
+  } else {
+    renderParentTree(div, filtered);
+  }
+
+  // Update stats
+  let succ = pageResults.filter(p=>p.success).length;
+  if (pageYwlx) {
+    let cols = new Set();
+    for (let p of pageResults) { let i = pageYwlx[p.url]; if (i && i.ywlx1) cols.add(i.ywlx1); }
+    document.getElementById('pageStats').textContent = `共 ${pageResults.length} 页 / ${succ} 成功 / ${cols.size} 个栏目`;
+  } else {
+    let depths = new Set(pageResults.map(p=>p.depth||0)).size;
+    document.getElementById('pageStats').textContent = `共 ${pageResults.length} 页 / ${succ} 成功 / ${depths} 个层级`;
+  }
+}
+
+// ===== 按栏目层级（ywlx1-4）树视图：与导出 CSV 的 ywlx 一致 =====
+function loadYwlxClassification() {
+  let dir = (crawlMetrics && crawlMetrics.result_dir) || (pageResults[0] && pageResults[0].result_dir) || '';
+  if (!dir) { pageYwlx = null; return; }
+  let token = getToken();
+  let headers = {};
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  fetch('/orchestrator/classification?result_dir=' + encodeURIComponent(dir) + '&leaf_only=' + (getLeafOnly()?'true':'false'), { headers })
+    .then(r => r.ok ? r.json() : Promise.reject('classification failed'))
+    .then(d => { pageYwlx = d.pages || {}; renderPageList(document.getElementById('pageSearch')?.value); })
+    .catch(() => { pageYwlx = null; renderPageList(document.getElementById('pageSearch')?.value); });
+}
+
+function countYwlx(node) {
+  let n = node.pages.length;
+  for (let k in node.children) n += countYwlx(node.children[k]);
+  return n;
+}
+
+function ywlxLeafHtml(p, depth) {
+  let idx = pageResults.indexOf(p);
+  return `<div class="tree-leaf${currentPreviewPage && currentPreviewPage.url === p.url ? ' active' : ''}"
+                onclick="selectPage(pageResults[${idx}])" data-idx="${idx}"
+                style="padding-left:${28 + depth * 16}px;">
+             ${statusIcon(p.success)} <span class="tree-label">${esc((p.title || p.url || '').slice(0, 45))}</span>
+           </div>`;
+}
+
+function renderYwlxTree(div, filtered) {
+  let root = {name: '', children: {}, pages: []};
+  for (let p of filtered) {
+    let info = pageYwlx[p.url];
+    if (!info) continue;  // 起始首页 / 无归类信息页不进栏目树，避免显示为"未归类"
+    let path = [info.ywlx1, info.ywlx2, info.ywlx3, info.ywlx4].filter(v => v && v.trim());
+    let node = root;
+    for (let seg of path) {
+      if (!node.children[seg]) node.children[seg] = {name: seg, children: {}, pages: []};
+      node = node.children[seg];
+    }
+    node.pages.push(p);
+  }
+  div.innerHTML = renderYwlxNode(root, 0) || '<p style="color:var(--text-sec);">无法构建栏目层级树</p>';
+}
+
+function renderYwlxNode(node, depth) {
+  let html = '';
+  const keys = Object.keys(node.children);
+  for (let ci = 0; ci < keys.length; ci++) {
+    let k = keys[ci];
+    let c = node.children[k];
+    let gid = 'yw_' + depth + '_' + ci;   // 不用 btoa：栏目名可能是中文，btoa 只支持 Latin1
+    let body = renderYwlxNode(c, depth + 1);
+    if (c.pages.length) body += c.pages.map(p => ywlxLeafHtml(p, depth + 1)).join('');
+    html += '<div class="tree-group">';
+    html += `<div class="tree-group-header" onclick="toggleTreeGroup('${gid}',this)" id="${gid}_hdr">`;
+    html += `<span class="tree-arrow">${iconSvg('chevron-down', 10)}</span>`;
+    html += `<span>${iconSvg('folder', 14)} ${k}</span>`;
+    html += `<span class="tree-badge">${countYwlx(c)} 页</span>`;
+    html += '</div>';
+    html += `<div class="tree-children" id="${gid}_kids">${body}</div>`;
+    html += '</div>';
+  }
+  // 未归类（无 ywlx 路径的页面）：仅根节点渲染。
+  // 之前在每个节点都渲染，导致栏目内页面重复 —— 递归调用里的 node.pages 又生成
+  // 一次"未归类"分组，父级再把同一批页面追加为普通叶子（工程业绩/资质荣誉等
+  // 栏目页全部出现两遍）。非根节点的 node.pages 已由父级 c.pages.map 渲染成叶子。
+  if (depth === 0 && node.pages.length) {
+    let gid = 'yw_uncat_' + depth;
+    let body = node.pages.map(p => ywlxLeafHtml(p, depth + 1)).join('');
+    html += '<div class="tree-group">';
+    html += `<div class="tree-group-header" onclick="toggleTreeGroup('${gid}',this)" id="${gid}_hdr">`;
+    html += `<span class="tree-arrow">${iconSvg('chevron-down', 10)}</span>`;
+    html += `<span>${iconSvg('package', 14)} 未归类</span>`;
+    html += `<span class="tree-badge">${node.pages.length} 页</span>`;
+    html += '</div>';
+    html += `<div class="tree-children" id="${gid}_kids">${body}</div>`;
+    html += '</div>';
+  }
+  return html;
+}
+
+// ===== Depth-flat tree mode =====
+function renderDepthTree(div, filtered) {
+  let groups = {};
+  let depthLabels = {0:'起始页'};
+  for (let p of filtered) {
+    let d = p.depth || 0;
+    if (!groups[d]) groups[d] = [];
+    groups[d].push(p);
+    if (!depthLabels[d]) depthLabels[d] = d === 1 ? '一级页面' : d === 2 ? '二级页面' : d === 3 ? '三级页面' : `${d}级页面`;
+  }
+  let depths = Object.keys(groups).map(Number).sort((a,b)=>a-b);
+  let html = '';
+  for (let d of depths) {
+    let pages = groups[d];
+    let gid = 'tg_d_' + d;
+    let label = depthLabels[d] || `深度 ${d}`;
+    html += buildTreeGroup(gid, label, pages);
+  }
+  div.innerHTML = html;
+}
+
+// ===== Parent-child tree mode =====
+function renderParentTree(div, filtered) {
+  // Build parent-child map
+  let children = {}; // parent_url -> [pages]
+  let roots = [];
+  let sorted = [...filtered].sort((a,b) => (a.depth||0)-(b.depth||0));
+  for (let p of sorted) {
+    let parent = p.parent_url || '';
+    if (!parent) {
+      roots.push(p);
+    } else {
+      if (!children[parent]) children[parent] = [];
+      children[parent].push(p);
+    }
+  }
+  // For root pages, also find children by URL prefix if no direct parent
+  if (roots.length === 0) {
+    // All pages have a parent — use depth 0 pages as roots
+    roots = sorted.filter(p => (p.depth||0) === 0);
+    if (roots.length === 0) roots = [sorted[0]].filter(Boolean);
+  }
+
+  let html = '';
+  for (let root of roots) {
+    html += buildTreeNode(root, children, 0);
+  }
+
+  // Add orphan pages (no parent and not root)
+  let orphanPages = sorted.filter(p => {
+    if (roots.includes(p)) return false;
+    let parent = p.parent_url || '';
+    return !parent || !children[parent];
+  });
+  if (orphanPages.length > 0) {
+    html += buildTreeGroup('tg_orphan', iconSvg('package',14)+' 其他页面', orphanPages);
+  }
+
+  div.innerHTML = html || '<p style="color:var(--text-sec);">无法构建层级树</p>';
+}
+
+function buildTreeNode(page, children, depth) {
+  let gid = 'tn_' + btoa(page.url).replace(/[+/=]/g,'').slice(0,16);
+  let kids = children[page.url] || [];
+  let idx = pageResults.indexOf(page);
+  let icon = statusIcon(page.success);
+  let depthLabels = {0:'起始',1:'一级',2:'二级',3:'三级',4:'四级',5:'五级'};
+  let dlabel = depthLabels[page.depth] || `深度${page.depth}`;
+
+  let html = '<div class="tree-group">';
+  html += `<div class="tree-group-header" onclick="toggleTreeGroup('${gid}',this)" id="${gid}_hdr">`;
+  html += `<span class="tree-arrow">${kids.length > 0 ? iconSvg('chevron-down',10) : iconSvg('circle-dot',8)}</span>`;
+  html += `<span style="font-weight:500;">${iconSvg('file',14)} ${esc((page.title||page.url||'').slice(0,35))}</span>`;
+  html += `<span class="tree-badge">${dlabel}</span>`;
+  if (kids.length > 0) html += `<span class="tree-badge" style="margin-left:2px;">${kids.length} 子页</span>`;
+  html += '</div>';
+
+  if (kids.length > 0) {
+    html += `<div class="tree-children" id="${gid}_kids">`;
+    // Show the parent page itself as selectable
+    html += `<div class="tree-leaf${currentPreviewPage&&currentPreviewPage.url===page.url?' active':''}"
+                  onclick="selectPage(pageResults[${idx}])" data-idx="${idx}"
+                  style="padding-left:${28+depth*16}px;">
+               ${icon} ${iconSvg('paperclip',12)} <span class="tree-label">本页 (${esc((page.title||page.url||'').slice(0,30))})</span>
+             </div>`;
+    for (let child of kids) {
+      html += buildTreeLeaf(child, depth + 1);
+      // Recursively render grandchildren
+      let grandkids = children[child.url] || [];
+      if (grandkids.length > 0) {
+        html += buildSubTree(child, children, depth + 1);
+      }
+    }
+    html += '</div>';
+  } else {
+    // Leaf node: just show it as selectable
+    html += `<div class="tree-children" id="${gid}_kids">`;
+    html += `<div class="tree-leaf${currentPreviewPage&&currentPreviewPage.url===page.url?' active':''}"
+                  onclick="selectPage(pageResults[${idx}])" data-idx="${idx}"
+                  style="padding-left:${28+depth*16}px;">
+               ${icon} <span class="tree-label">${esc((page.title||page.url||'').slice(0,45))}</span>
+             </div>`;
+    html += '</div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function buildSubTree(parentPage, children, depth) {
+  let kids = children[parentPage.url] || [];
+  if (kids.length === 0) return '';
+  let html = '';
+  for (let child of kids) {
+    let gid = 'tn_' + btoa(child.url).replace(/[+/=]/g,'').slice(0,16);
+    let idx = pageResults.indexOf(child);
+    html += `<div class="tree-group" style="margin-left:${16+depth*8}px;">`;
+    html += `<div class="tree-group-header" onclick="toggleTreeGroup('${gid}',this)" id="${gid}_hdr" style="font-size:12px;">`;
+    html += `<span class="tree-arrow">${kids.length > 0 ? iconSvg('chevron-down',10) : iconSvg('circle-dot',8)}</span>`;
+    html += `<span>${iconSvg('file',12)} ${esc((child.title||child.url||'').slice(0,30))}</span>`;
+    if (kids.length > 0) html += `<span class="tree-badge">${kids.length}</span>`;
+    html += '</div>';
+    html += `<div class="tree-children" id="${gid}_kids">`;
+    html += `<div class="tree-leaf${currentPreviewPage&&currentPreviewPage.url===child.url?' active':''}"
+                  onclick="selectPage(pageResults[${idx}])" data-idx="${idx}"
+                  style="padding-left:${28+depth*16}px;">
+               ${iconSvg('paperclip',12)} <span class="tree-label">本页</span>
+             </div>`;
+    for (let grandkid of kids) {
+      html += buildTreeLeaf(grandkid, depth + 1);
+    }
+    html += '</div></div>';
+    // Recurse for deeper levels
+    let deeper = children[child.url] || [];
+    if (deeper.length > 0) {
+      html += buildSubTree(child, children, depth + 1);
+    }
+  }
+  return html;
+}
+
+function buildTreeLeaf(page, depth) {
+  let idx = pageResults.indexOf(page);
+  return `<div class="tree-leaf${currentPreviewPage&&currentPreviewPage.url===page.url?' active':''}"
+                onclick="selectPage(pageResults[${idx}])" data-idx="${idx}"
+                style="padding-left:${28+depth*16}px;">
+             ${statusIcon(page.success)} <span class="tree-label">${esc((page.title||page.url||'').slice(0,45))}</span>
+           </div>`;
+}
+
+function buildTreeGroup(gid, label, pages) {
+  let html = '<div class="tree-group">';
+  html += `<div class="tree-group-header" onclick="toggleTreeGroup('${gid}',this)" id="${gid}_hdr">`;
+  html += `<span class="tree-arrow">${iconSvg('chevron-down',10)}</span>`;
+  html += `<span>${iconSvg('folder',14)} ${label}</span>`;
+  html += `<span class="tree-badge">${pages.length} 页</span>`;
+  html += '</div>';
+  html += `<div class="tree-children" id="${gid}_kids">`;
+  for (let p of pages) {
+    html += buildTreeLeaf(p, 0);
+  }
+  html += '</div></div>';
+  return html;
+}
+
+function toggleTreeGroup(gid, header) {
+  let kids = document.getElementById(gid + '_kids');
+  if (!kids) return;
+  let collapsed = kids.classList.toggle('collapsed');
+  header.classList.toggle('collapsed', collapsed);
+}
+
+function filterPages() {
+  renderPageList(document.getElementById('pageSearch').value);
+}
+
+let currentPreviewPage = null;
+let treeMode = 'depth'; // 'depth' = flat by depth, 'parent' = hierarchical parent-child（保留做旧批次兜底）
+let pageYwlx = null;    // url -> {ywlx1..4, title, riqi}（从 /orchestrator/classification 拉取）
+
+function toggleTreeMode() {
+  treeMode = treeMode === 'depth' ? 'parent' : 'depth';
+  let btn = document.getElementById('btnTreeMode');
+  btn.innerHTML = treeMode === 'depth' ? iconSvg('folder',14)+' 按层级' : iconSvg('link-icon',14)+' 按来源';
+  renderPageList(document.getElementById('pageSearch')?.value);
+}
+
+async function selectPage(pr) {
+  if (!pr) return;
+  currentPreviewPage = pr;
+  // Update active highlight in tree
+  let idx = pageResults.indexOf(pr);
+  document.querySelectorAll('.tree-leaf').forEach(leaf => {
+    leaf.classList.toggle('active', parseInt(leaf.dataset.idx) === idx);
+  });
+  let mdContent;
+  let cleanedFallbackNotice = false;
+  if (currentCleanMode === 'cleaned' && cleanedDir) {
+    // 清洗后模式：从 /cleaned/ 端点加载
+    mdContent = currentPageMdCleaned[pr.url];
+    if (!mdContent && pr.filename) {
+      try {
+        let token = getToken();
+        let headers = {};
+        if (token) headers['Authorization'] = 'Bearer ' + token;
+        let resp = await fetch(`/orchestrator/cleaned/${encodeURIComponent(cleanedDir)}/${encodeURIComponent(pr.filename)}`, {
+          headers: headers
+        });
+        if (resp.ok) {
+          mdContent = await resp.text();
+          currentPageMdCleaned[pr.url] = mdContent;
+        }
+      } catch(e) {}
+    }
+    // 清洗后文件缺失（skipped 或未启用清洗）→ 回退原始，用横幅提示而非混入内容
+    if (!mdContent) {
+      let rawMd = currentPageMd[pr.url];
+      if (!rawMd && pr.result_dir && pr.filename) {
+        try {
+          let token = getToken();
+          let headers = {};
+          if (token) headers['Authorization'] = 'Bearer ' + token;
+          let resp = await fetch(`/orchestrator/result/${encodeURIComponent(pr.result_dir)}/${encodeURIComponent(pr.filename)}`, {
+            headers: headers
+          });
+          if (resp.ok) { rawMd = await resp.text(); currentPageMd[pr.url] = rawMd; }
+        } catch(e) {}
+      }
+      mdContent = rawMd || '';
+      cleanedFallbackNotice = true;
+    }
+  } else {
+    // 原始模式
+    mdContent = currentPageMd[pr.url];
+    if (!mdContent && pr.result_dir && pr.filename) {
+      try {
+        let token = getToken();
+        let headers = {};
+        if (token) headers['Authorization'] = 'Bearer ' + token;
+        let resp = await fetch(`/orchestrator/result/${encodeURIComponent(pr.result_dir)}/${encodeURIComponent(pr.filename)}`, {
+          headers: headers
+        });
+        if (resp.ok) {
+          mdContent = await resp.text();
+          currentPageMd[pr.url] = mdContent;
+        }
+      } catch(e) {}
+    }
+  }
+  if (!mdContent) {
+    mdContent = `# ${pr.title||'Untitled'}\n\n> URL: ${pr.url}\n> Status: ${pr.status_code||'?'}\n\n*正在加载内容...*`;
+  }
+  previewContent = mdContent;
+  if (currentTab === 'raw') showRaw(mdContent);
+  else if (currentTab === 'edit') showEdit(mdContent);
+  else showRender(mdContent, {notice: cleanedFallbackNotice ? '⚠️ 此页无清洗后版本（可能因内容过短被跳过），当前显示的是原始内容。' : ''});
+}
+
+let currentTab = 'render';
+
+function switchCleanMode(mode) {
+  currentCleanMode = mode;
+  // 更新切换按钮样式
+  let btnRaw = document.getElementById('btnModeRaw');
+  let btnCleaned = document.getElementById('btnModeCleaned');
+  if (btnRaw) {
+    btnRaw.style.background = mode==='raw'?'var(--primary)':'none';
+    btnRaw.style.color = mode==='raw'?'#fff':'var(--text-sec)';
+  }
+  if (btnCleaned) {
+    btnCleaned.style.background = mode==='cleaned'?'var(--primary)':'none';
+    btnCleaned.style.color = mode==='cleaned'?'#fff':'var(--text-sec)';
+  }
+  // 清洗后模式也允许编辑
+  // let editTab = document.querySelector('.preview-tab[data-tab="edit"]');
+  // if (editTab) {
+  //   editTab.style.opacity = mode==='cleaned'?'0.4':'1';
+  //   editTab.style.pointerEvents = mode==='cleaned'?'none':'auto';
+  // }
+  // 重新加载当前页
+  if (currentPreviewPage) selectPage(currentPreviewPage);
+}
+
+function switchTab(tab) {
+  // 清洗后模式也允许编辑
+  // if (tab === 'edit' && currentCleanMode === 'cleaned') return;
+  currentTab = tab;
+  document.querySelectorAll('.preview-tab').forEach(b => { b.style.color='var(--text-sec)'; b.style.borderBottom='2px solid transparent'; });
+  let btn = document.querySelector(`.preview-tab[data-tab="${tab}"]`);
+  if (btn) { btn.style.color='var(--primary)'; btn.style.borderBottom='2px solid var(--primary)'; }
+  document.getElementById('tabRender').style.display = tab==='render'?'block':'none';
+  document.getElementById('tabRaw').style.display = tab==='raw'?'block':'none';
+  document.getElementById('tabEdit').style.display = tab==='edit'?'block':'none';
+  document.getElementById('editToolbar').style.display = tab==='edit'?'flex':'none';
+  document.getElementById('btnSaveEdit').style.display = tab==='edit'?'inline-flex':'none';
+  // 渲染 tab：若编辑器里保存着当前页的未刷新修改，直接以编辑器内容渲染
+  if (tab === 'render' && cmEditor && editSourceUrl === currentPreviewPage?.url) {
+    showRender(cmEditor.state.doc.toString());
+    return;
+  }
+  // Populate raw/edit content on switch — 按当前模式从对应缓存取
+  if (currentPreviewPage) {
+    let cache = currentCleanMode === 'cleaned' ? currentPageMdCleaned : currentPageMd;
+    let mdContent = cache[currentPreviewPage.url];
+    if (currentCleanMode === 'cleaned' && !cleanedDir) return; // 无清洗目录时不加载
+    if (!mdContent && currentPreviewPage.filename) {
+      let token = getToken();
+      let endpoint = currentCleanMode === 'cleaned' && cleanedDir
+        ? `/orchestrator/cleaned/${cleanedDir}/${currentPreviewPage.filename}`
+        : `/orchestrator/result/${currentPreviewPage.result_dir}/${currentPreviewPage.filename}`;
+      let headers = {};
+      if (token) headers['Authorization'] = 'Bearer ' + token;
+      fetch(endpoint, {
+        headers: headers
+      }).then(resp => resp.ok ? resp.text() : null).then(text => {
+        if (text) { cache[currentPreviewPage.url] = text; }
+        if (currentTab === 'raw') showRaw(cache[currentPreviewPage.url] || '');
+        else if (currentTab === 'edit') showEdit(cache[currentPreviewPage.url] || '');
+      });
+    } else if (mdContent || currentTab !== 'render') {
+      if (tab === 'raw') showRaw(mdContent || '');
+      else if (tab === 'edit') showEdit(mdContent || '');
+    }
+  }
+}
+
+function looksLikeHtml(s) {
+  if (!s) return false;
+  let t = s.trim();
+  return /^(?:<!doctype html>|<html[ >]|<head[ >]|<body[ >]|<div\b|<section\b|<article\b|<main\b|<table\b|<ul\b|<ol\b|<p\b|<h[1-6]\b)/i.test(t);
+}
+
+function updateBadge(md) {
+  let b = document.getElementById('previewBadge');
+  if (!b) return;
+  if (!md || !md.trim()) { b.style.display = 'none'; return; }
+  b.textContent = looksLikeHtml(md) ? 'HTML' : 'Markdown';
+  b.style.display = 'inline-flex';
+}
+
+function renderHtmlPreview(html, container) {
+  // 剥离 <html>/<head>/<body> 包装，只取 body 内容，避免 iframe 双重包裹
+  let bodyHtml = html || '';
+  let m = bodyHtml.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+  if (m) bodyHtml = m[1];
+  const styled = '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+    + '<style>'
+    + 'body{font-family:system-ui,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;'
+    + 'line-height:1.75;color:#1e293b;max-width:960px;margin:0 auto;padding:24px;}'
+    + 'h1,h2,h3,h4{color:#1e293b;margin:1.2em 0 .5em;}p{margin:.6em 0;}'
+    + 'img{max-width:100%;height:auto;border-radius:6px;}'
+    + 'table{border-collapse:collapse;width:100%;}th,td{border:1px solid #e2e8f0;padding:8px 12px;text-align:left;}'
+    + 'a{color:#2563eb;text-decoration:none;}'
+    + 'pre,code{background:#f1f5f9;border-radius:4px;}pre{padding:14px;overflow-x:auto;}code{padding:2px 6px;}'
+    + '</style></head><body>' + bodyHtml + '</body></html>';
+  // 追加 iframe 而非覆盖容器，保留 showRender 已写入的 notice 横幅
+  container.insertAdjacentHTML('beforeend', '<iframe id="previewFrame" style="width:100%;border:none;min-height:70vh;" sandbox=""></iframe>');
+  const frame = container.querySelector('#previewFrame');
+  frame.srcdoc = styled;
+  frame.onload = function() {
+    try {
+      this.style.height = (this.contentWindow.document.body.scrollHeight + 40) + 'px';
+    } catch(e) { /* 沙箱限制时保持 min-height */ }
+  };
+}
+
+function showRender(md, opts) {
+  opts = opts || {};
+  previewContent = md || '';
+  updateBadge(previewContent);
+  let el = document.getElementById('tabRender');
+  el.innerHTML = opts.notice ? `<div class="notice-banner">${opts.notice}</div>` : '';
+  // 内容为结构化 HTML 时用 iframe 渲染（带最小排版样式）；否则按 Markdown 渲染（兼容旧 .md 数据）
+  if (looksLikeHtml(md)) {
+    renderHtmlPreview(md, el);
+  } else {
+    el.innerHTML += (DOMPurify.sanitize(marked.parse(md||'') || '<p style="color:var(--text-sec);">无内容</p>'));
+  }
+}
+
+function showRaw(md) {
+  previewContent = md || '';
+  updateBadge(previewContent);
+  let div = document.getElementById('tabRaw');
+  div.innerHTML = '';
+  if (rawEditor) rawEditor.destroy();
+  let {EditorView, EditorState, basicSetup, markdown, html, oneDark} = window.CodeMirrorModule;
+  // 只读 CodeMirror：与编辑 tab 同一套高亮，阅读源码更清晰
+  let lang = looksLikeHtml(md) ? html() : markdown();
+  rawEditor = new EditorView({
+    doc: md||'',
+    extensions: [basicSetup, lang, oneDark,
+      EditorView.editable.of(false), EditorState.readOnly.of(true)],
+    parent: div,
+  });
+}
+
+function showEdit(md) {
+  previewContent = md || '';
+  updateBadge(previewContent);
+  let div = document.getElementById('tabEdit');
+  div.innerHTML = '';
+  if (cmEditor) cmEditor.destroy();
+  let {EditorView, basicSetup, markdown, html, oneDark} = window.CodeMirrorModule;
+  // 内容为结构化 HTML 时用 HTML 语法高亮编辑，否则用 Markdown（兼容旧 .md 数据）
+  let lang = looksLikeHtml(md) ? html() : markdown();
+  editSourceUrl = currentPreviewPage ? currentPreviewPage.url : null;
+  cmEditor = new EditorView({
+    doc: md||'',
+    extensions: [basicSetup, lang, oneDark],
+    parent: div,
+  });
+  cmEditor.focus();
+}
+
+function undoEdit() { if (cmEditor) { window.CodeMirrorCmd.undo(cmEditor); cmEditor.focus(); } }
+function redoEdit() { if (cmEditor) { window.CodeMirrorCmd.redo(cmEditor); cmEditor.focus(); } }
+
+function formatEdit() {
+  if (!cmEditor) return;
+  let doc = cmEditor.state.doc.toString();
+  if (!looksLikeHtml(doc)) { alert('仅 HTML 内容支持格式化'); return; }
+  let b = window.jsBeautify;
+  if (!b) return;
+  let format = b.html || b;
+  let formatted = format(doc, {indent_size: 2, preserve_newlines: true, max_preserve_newlines: 2, wrap_line_length: 120});
+  cmEditor.dispatch({changes: {from: 0, to: doc.length, insert: formatted}});
+}
+
+function refreshRenderFromEdit() {
+  if (!cmEditor) return;
+  showRender(cmEditor.state.doc.toString());
+  switchTab('render');
+}
+
+function getCurrentContent() {
+  if (cmEditor) return cmEditor.state.doc.toString();
+  if (rawEditor) return rawEditor.state.doc.toString();
+  return previewContent || '';
+}
+
+async function saveEdit() {
+  if (!cmEditor || !currentPreviewPage) return;
+  let content = cmEditor.state.doc.toString();
+
+  // 本地缓存（现有逻辑）
+  if (currentCleanMode === 'cleaned') {
+    currentPageMdCleaned[currentPreviewPage.url] = content;
+  } else {
+    currentPageMd[currentPreviewPage.url] = content;
+  }
+  WizardState.edits = WizardState.edits || {};
+  let editKey = currentCleanMode === 'cleaned' ? 'cleaned_' + currentPreviewPage.url : currentPreviewPage.url;
+  WizardState.edits[editKey] = content;
+  saveWizardState();
+
+  // 持久化到服务器（写回 raw 或 cleaned 文件）
+  let dir = currentCleanMode === 'cleaned' ? cleanedDir : currentPreviewPage.result_dir;
+  if (!dir || !currentPreviewPage.filename) { alert('缺少目录/文件名，仅保存到本地'); return; }
+  try {
+    let token = getToken();
+    let headers = {'Content-Type':'application/json'};
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    let resp = await fetch(`/orchestrator/save/${encodeURIComponent(dir)}/${encodeURIComponent(currentPreviewPage.filename)}`, {
+      method: 'POST', headers: headers, body: JSON.stringify({content: content})
+    });
+    if (resp.ok) alert('修改已保存');
+    else alert('保存失败: ' + (await resp.text()));
+  } catch(e) {
+    alert('保存失败（已保留本地）: ' + e.message);
+  }
+}
+
+function copyHtml() {
+  let content = getCurrentContent();
+  if (!content) return;
+  navigator.clipboard.writeText(content).then(() => alert('已复制到剪贴板'));
+}
+
+function sanitizeFilePart(s) {
+  return (s || 'page').replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim() || 'page';
+}
+
+function downloadCurrentPage() {
+  let content = getCurrentContent();
+  if (!content) return;
+  let blob = new Blob([content], {type:'text/html;charset=utf-8'});
+  saveAs(blob, sanitizeFilePart(currentPreviewPage?.title)+'.html');
+}
+
+async function downloadAllZip() {
+  let zip = new JSZip();
+  let token = getToken();
+  let useCleaned = currentCleanMode === 'cleaned' && cleanedDir;
+  let cache = useCleaned ? currentPageMdCleaned : currentPageMd;
+  // Collect all pages that have result_dir/filename but may not be in cache
+  let urlsAdded = new Set();
+  for (let p of pageResults) {
+    if (p.filename) {
+      let md = cache[p.url];
+      if (!md) {
+        try {
+          let endpoint = useCleaned
+            ? `/orchestrator/cleaned/${cleanedDir}/${p.filename}`
+            : `/orchestrator/result/${p.result_dir}/${p.filename}`;
+          let headers = {};
+          if (token) headers['Authorization'] = 'Bearer ' + token;
+          let resp = await fetch(endpoint, {
+            headers: headers
+          });
+          if (resp.ok) md = await resp.text();
+          else if (useCleaned) {
+            // 清洗后文件缺失，回退原始
+            let rawHeaders = {};
+            if (token) rawHeaders['Authorization'] = 'Bearer ' + token;
+            let rawResp = await fetch(`/orchestrator/result/${encodeURIComponent(p.result_dir)}/${encodeURIComponent(p.filename)}`, {
+              headers: rawHeaders
+            });
+            if (rawResp.ok) md = await rawResp.text();
+          }
+        } catch(e) {}
+      }
+      let name = p.filename || (p.url||'page').replace(/[^a-zA-Z0-9一-鿿\-_\.]/g, '_')+'.html';
+      // 清洗后模式文件名加 _cleaned 后缀
+      if (useCleaned && !name.endsWith('_cleaned.html')) {
+        name = name.replace(/\.html$/, '_cleaned.html');
+      }
+      zip.file(name, md || `<!doctype html><html><head><meta charset="utf-8"><title>${p.title||'Untitled'}</title></head><body><h1>${p.title||'Untitled'}</h1><p>URL: ${p.url}</p></body></html>`);
+      urlsAdded.add(p.url);
+    }
+  }
+  // Add any locally cached pages not yet covered
+  for (let [path, md] of Object.entries(cache)) {
+    if (!urlsAdded.has(path)) {
+      let name = path.replace(/[^a-zA-Z0-9一-鿿\-_\.]/g, '_')+'.html';
+      zip.file(name, md);
+    }
+  }
+  // Fallback: if still no files, create placeholders
+  if (Object.keys(cache).length === 0 && pageResults.length > 0) {
+    pageResults.forEach(p => {
+      if (!urlsAdded.has(p.url)) {
+        let name = (p.url||'page').replace(/[^a-zA-Z0-9一-鿿\-_\.]/g, '_')+'.html';
+        zip.file(name, `<!doctype html><html><head><meta charset="utf-8"><title>${p.title||'Untitled'}</title></head><body><h1>${p.title||'Untitled'}</h1><p>URL: ${p.url}</p></body></html>`);
+      }
+    });
+  }
+  let blob = await zip.generateAsync({type:'blob'});
+  saveAs(blob, useCleaned ? 'crawl_results_cleaned.zip' : 'crawl_results.zip');
+}
+
+function downloadSummary() {
+  let summary = {
+    url: WizardState.url,
+    timestamp: new Date().toISOString(),
+    pageCount: pageResults.length,
+    config: {
+      max_depth: WizardState.max_depth, max_pages: WizardState.max_pages,
+      concurrent: WizardState.concurrent,
+      site_mode: WizardState.site_mode || 'auto',
+      enable_cleaning: WizardState.enable_cleaning ?? true,
+      cleaning_mode: WizardState.cleaning_mode || 'standard',
+    },
+    metrics: crawlMetrics?.metrics || {},
+    verdict: crawlMetrics?.verdict || '',
+    feedback: crawlMetrics?.feedback || '',
+    cleaned_dir: cleanedDir || '',
+    clean_stats: cleanStats || {},
+    pages: pageResults,
+  };
+  let blob = new Blob([JSON.stringify(summary, null, 2)], {type:'application/json;charset=utf-8'});
+  saveAs(blob, 'run_summary.json');
+}
+
+// 导出当前批次的 content_001 CSV（含 ywlx1-4 栏目层级，供导入数据库）
+function getLeafOnly() {
+  let el = document.getElementById('chkLeafOnly');
+  if (el) return el.checked;
+  return !!WizardState.leaf_only;
+}
+
+function exportCsv() {
+  let dir = (crawlMetrics && crawlMetrics.result_dir) || (pageResults[0] && pageResults[0].result_dir) || '';
+  if (!dir) { alert('当前没有可导出的批次，请先完成一次爬取'); return; }
+  window.open('/orchestrator/export_csv?result_dir=' + encodeURIComponent(dir) + '&leaf_only=' + (getLeafOnly()?'true':'false'));
+}
+
+async function importToDb(evt) {
+  let dir = (crawlMetrics && crawlMetrics.result_dir) || (pageResults[0] && pageResults[0].result_dir) || '';
+  if (!dir) { alert('当前没有可导入的批次，请先完成一次爬取'); return; }
+  if (!confirm('将该批次清洗后的内容一键导入 SQLite 数据库？\n（会在批次目录下生成 content_001_*.db）')) return;
+  let btn = evt && evt.currentTarget ? evt.currentTarget : null;
+  let origText = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '导入中...'; }
+  try {
+    let token = getToken();
+    let headers = {'Content-Type':'application/json'};
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    let resp = await fetch('/orchestrator/import_db?result_dir=' + encodeURIComponent(dir) + '&leaf_only=' + (getLeafOnly()?'true':'false'), {
+      method: 'POST', headers: headers, body: JSON.stringify({})
+    });
+    if (resp.ok) {
+      let d = await resp.json();
+      // 一键展示数据库地址（持久地址栏 + 自动滚动到可见位置）
+      showDbAddr(d);
+      let msg = '✅ 导入成功：已导入 ' + d.inserted + ' 条记录';
+      if (d.gsmc) msg += '\n公司: ' + d.gsmc;
+      msg += '\n\n数据库地址已显示在页面底部，点击「复制地址」即可复制完整路径。';
+      alert(msg);
+    } else {
+      alert('❌ 导入失败: ' + (await resp.text()));
+    }
+  } catch (e) {
+    alert('❌ 网络错误: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = origText; }
+  }
+}
+
+// ===== 数据库地址栏：导入成功后自动展示完整地址，一键复制 =====
+function showDbAddr(d) {
+  let card = document.getElementById('dbAddrCard');
+  let text = document.getElementById('dbAddrText');
+  let meta = document.getElementById('dbAddrMeta');
+  if (!card || !text) return;
+  // 优先服务端返回的绝对路径；兜底用 result_dir + 文件名拼接相对路径
+  let addr = d.db_abs_path || ((d.result_dir ? d.result_dir.replace(/\\/g,'/') + '/' : '') + (d.db_path || ''));
+  text.textContent = addr;  // textContent 防注入：路径按纯文本渲染
+  let bits = [];
+  if (d.inserted !== undefined) bits.push('已导入 ' + d.inserted + ' 条');
+  if (d.db_size) bits.push(d.db_size + ' KB');
+  if (d.gsmc) bits.push(d.gsmc);
+  meta.textContent = bits.join(' · ');
+  card.style.display = '';
+  // 持久化：刷新/切步后地址仍在（WizardState 走 sessionStorage）
+  WizardState.lastDbAddr = addr;
+  WizardState.lastDbMeta = meta.textContent;
+  saveWizardState();
+  card.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
+function hideDbAddr() {
+  let card = document.getElementById('dbAddrCard');
+  if (card) card.style.display = 'none';
+}
+
+function copyDbAddr(btn) {
+  let text = document.getElementById('dbAddrText');
+  if (!text || !text.textContent) return;
+  let addr = text.textContent;
+  let done = function() {
+    let orig = btn ? btn.textContent : '';
+    if (btn) { btn.textContent = '✓ 已复制'; btn.disabled = true; }
+    setTimeout(function() { if (btn) { btn.textContent = orig; btn.disabled = false; } }, 1500);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(addr).then(done, function() { _copyFallback(addr); done(); });
+  } else {
+    _copyFallback(addr); done();
+  }
+}
+
+function _copyFallback(addr) {
+  // 老浏览器/非安全上下文兜底：临时 textarea + execCommand
+  let ta = document.createElement('textarea');
+  ta.value = addr;
+  ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); } catch(e) {}
+  document.body.removeChild(ta);
+}
+
+function restoreDbAddr() {
+  // 从 WizardState 恢复上次导入的数据库地址（sessionStorage 级：同一会话内刷新不丢）
+  if (!WizardState.lastDbAddr) return;
+  let card = document.getElementById('dbAddrCard');
+  let text = document.getElementById('dbAddrText');
+  let meta = document.getElementById('dbAddrMeta');
+  if (!card || !text) return;
+  text.textContent = WizardState.lastDbAddr;
+  if (meta && WizardState.lastDbMeta) meta.textContent = WizardState.lastDbMeta;
+  card.style.display = '';
+}
+
+function updateQualityBar() {
+  let div = document.getElementById('qualityBar');
+  if (!crawlMetrics || !crawlMetrics.metrics) {
+    div.innerHTML = '<span style="color:var(--text-sec);">质量评估: 暂无数据</span>';
+    return;
+  }
+  let m = crawlMetrics.metrics;
+  let verdict = crawlMetrics.verdict === 'pass';
+  let iconHtml = verdictIcon(verdict);
+  let color = verdict ? 'var(--success)' : 'var(--warning)';
+  let html = `<span style="color:${color};">${iconHtml} ${verdict?'通过':'需人工复核'}</span> |
+    非空率 ${((m.non_empty_ratio||0)*100).toFixed(0)}% | 噪点比 ${((m.noise_ratio||0)*100).toFixed(0)}% | 编码 ${m.encoding_ok?'正常':'异常'}`;
+  // 追加清洗统计
+  if (cleanStats && cleanStats.total !== undefined) {
+    html += ` | 清洗: ${cleanStats.cleaned||0} 成功 / ${cleanStats.failed||0} 失败`;
+  }
+  div.innerHTML = html;
+}
+
+function startNew() {
+  WizardState = {};
+  currentStep = 1;
+  pageResults = [];
+  currentPageMd = {};
+  currentPageMdCleaned = {};
+  cleanedDir = '';
+  cleanStats = null;
+  currentCleanMode = 'raw';
+  crawlMetrics = null;
+  currentPreviewPage = null;
+  hideDbAddr();   // 新任务收起数据库地址栏（WizardState 重置已清掉持久化）
+  saveWizardState();
+  showStep(1);
+  document.getElementById('urlInput').value = '';
+  validateUrl();
+}
+
+// ==================== HISTORY ====================
+function toggleHistory() {
+  document.getElementById('historyDrawer').classList.toggle('open');
+  document.getElementById('drawerOverlay').classList.toggle('open');
+  renderHistory();
+}
+
+function renderHistory() {
+  let q = (document.getElementById('historySearch')?.value||'').toLowerCase();
+  let filtered = history.filter(h => !q || h.url.toLowerCase().includes(q));
+  let div = document.getElementById('historyList');
+  if (filtered.length === 0) {
+    div.innerHTML = '<p style="color:var(--text-sec);">暂无历史记录</p>';
+    return;
+  }
+  div.innerHTML = filtered.map(h => `
+    <div class="card" style="margin-bottom:8px;font-size:13px;padding:16px;">
+      <div style="color:var(--text-sec);font-size:11px;">${esc(h.timestamp||'?')}</div>
+      <div style="margin:4px 0;color:var(--text);">${esc(h.url||'?')}</div>
+      <div style="color:var(--text-sec);font-size:12px;">${h.status==='pass'?verdictIcon(true)+' 通过':verdictIcon(false)+' 需复核'} | ${h.pageCount||0} 页 | 深度 ${h.maxDepth||0} 层 | 模式 ${({auto:'自动识别',static:'静态官网',dynamic:'动态官网'})[h.siteMode]||'自动识别'}</div>
+      <div style="display:flex;gap:4px;margin-top:8px;">
+        <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;" onclick="viewHistory('${h.id}')">查看结果</button>
+        <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;" onclick="reCrawl('${h.id}')">重新爬取</button>
+        <button class="btn btn-danger" style="padding:4px 10px;font-size:11px;" onclick="deleteHistory('${h.id}')">删除</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function addToHistory() {
+  let entry = {
+    id: Date.now().toString(36)+Math.random().toString(36).slice(2,8),
+    timestamp: new Date().toISOString(),
+    url: WizardState.url,
+    status: crawlMetrics?.verdict === 'pass' ? 'pass' : 'review',
+    pageCount: pageResults.length,
+    maxDepth: WizardState.max_depth || 3,
+    siteMode: WizardState.site_mode || 'auto',
+    resultDir: crawlMetrics?.result_dir || '',
+    edits: WizardState.edits || {},
+    pageResults: pageResults,
+    metrics: crawlMetrics,
+    cleanedDir: cleanedDir || '',
+    cleanStats: cleanStats || {},
+  };
+  history.unshift(entry);
+  if (history.length > 100) history = history.slice(0, 100);
+  saveHistory();
+}
+
+function viewHistory(id) {
+  let h = history.find(e => e.id === id);
+  if (!h) return;
+  WizardState.url = h.url;
+  WizardState.max_depth = h.maxDepth;
+  
+  // 恢复编辑内容，区分原始和清洗后的编辑
+  if (h.edits) {
+    WizardState.edits = h.edits;
+    currentPageMd = {};
+    currentPageMdCleaned = {};
+    
+    for (let key in h.edits) {
+      if (key.startsWith('cleaned_')) {
+        // 清洗后的编辑
+        let url = key.replace('cleaned_', '');
+        currentPageMdCleaned[url] = h.edits[key];
+      } else {
+        // 原始编辑
+        currentPageMd[key] = h.edits[key];
+      }
+    }
+  }
+  
+  // Restore page results from history if available
+  if (h.pageResults) pageResults = h.pageResults;
+  if (h.metrics) crawlMetrics = h.metrics;
+  // Restore cleaned data from history
+  if (h.cleanedDir) cleanedDir = h.cleanedDir;
+  if (h.cleanStats) cleanStats = h.cleanStats;
+  saveWizardState();
+  toggleHistory();
+  _suppressHistory = true;
+  goStep4();
+}
+
+function reCrawl(id) {
+  let h = history.find(e => e.id === id);
+  if (!h) return;
+  WizardState.url = h.url;
+  WizardState.max_depth = h.maxDepth;
+  if (h.siteMode) WizardState.site_mode = h.siteMode;
+  saveWizardState();
+  buildConfigUI(); // 重建配置面板，让模式卡片与参数恢复一致
+  toggleHistory();
+  goStep2();
+}
+
+function deleteHistory(id) {
+  if (!confirm('确定删除这条记录？')) return;
+  history = history.filter(e => e.id !== id);
+  saveHistory();
+  renderHistory();
+}
+
+function clearHistory() {
+  if (!confirm('确定清空全部历史记录？此操作不可撤销。')) return;
+  history = [];
+  saveHistory();
+  renderHistory();
+}
+
+// ==================== INIT ====================
+function initSplitter() {
+  let sidebar = document.getElementById('sidebarPanel');
+  let divider = document.getElementById('splitDivider');
+  if (!sidebar || !divider) return;
+
+  // Restore saved width
+  let saved = localStorage.getItem('c4ai_sidebar_width');
+  if (saved) {
+    let w = parseInt(saved);
+    if (w >= 180 && w <= 600) sidebar.style.width = w + 'px';
+  }
+
+  let startX = 0, startW = 0;
+  divider.addEventListener('mousedown', function(e) {
+    e.preventDefault();
+    startX = e.clientX;
+    startW = sidebar.offsetWidth;
+    divider.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  });
+  document.addEventListener('mousemove', function(e) {
+    if (!divider.classList.contains('dragging')) return;
+    let delta = e.clientX - startX;
+    let newW = startW + delta;
+    if (newW < 180) newW = 180;
+    if (newW > 600) newW = 600;
+    sidebar.style.width = newW + 'px';
+  });
+  document.addEventListener('mouseup', function() {
+    if (!divider.classList.contains('dragging')) return;
+    divider.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    localStorage.setItem('c4ai_sidebar_width', sidebar.offsetWidth);
+  });
+}
+
+// ==================== Fullscreen Preview ====================
+// 点击"全屏"按钮：预览面板脱离 flex 布局，覆盖整个屏幕（保留小边距）；
+// 再次点击或按 Esc 还原。便于查看宽内容（大表格/长 HTML/大图）。
+function toggleFullscreenPreview() {
+  let panel = document.getElementById('previewPanel');
+  let txt = document.getElementById('btnFullscreenText');
+  if (!panel) return;
+  let on = panel.classList.toggle('preview-panel-fullscreen');
+  if (txt) txt.textContent = on ? '退出全屏' : '全屏';
+  document.body.style.overflow = on ? 'hidden' : '';
+  // 切换后保持当前 tab 内容尺寸正确
+  try { if (typeof switchTab === 'function') {
+    let active = document.querySelector('.preview-tab.active');
+    if (active) switchTab(active.dataset.tab);
+  } } catch (e) {}
+}
+// Esc 退出全屏
+document.addEventListener('keydown', function(e) {
+  if (e.key !== 'Escape') return;
+  let panel = document.getElementById('previewPanel');
+  if (panel && panel.classList.contains('preview-panel-fullscreen')) {
+    toggleFullscreenPreview();
+  }
+});
+
+function init() {
+  // Restore token
+  let savedToken = sessionStorage.getItem('c4ai_token');
+  if (savedToken) document.getElementById('tokenInput').value = savedToken;
+
+  // Restore wizard state
+  if (WizardState.url) document.getElementById('urlInput').value = WizardState.url;
+  if (WizardState.edits) currentPageMd = WizardState.edits;
+
+  // Restore leaf_only toggle state
+  let chkLeaf = document.getElementById('chkLeafOnly');
+  if (chkLeaf) chkLeaf.checked = !!WizardState.leaf_only;
+
+  // Restore 上次导入的数据库地址栏
+  restoreDbAddr();
+
+  buildConfigUI();
+  showStep(currentStep);
+  validateUrl();
+  renderDag();
+  initSplitter();
+}
+
+// Override goStep4 to add history
+let _origGoStep4 = goStep4;
+let _suppressHistory = false;
+goStep4 = function() {
+  if (!_suppressHistory) addToHistory();
+  _suppressHistory = false;
+  _origGoStep4();
+};
+
+// ===== LLM CONFIG CENTER MODAL（统一配置中心） =====
+// 三合一：① 当前模型（provider/model，持久化 /llm/config，全端生效）
+//         ② 密钥管理（/llm/keys 保存；/llm/keys/test 测试——留空输入即用
+//            服务端已存 Key 验证连通，不再误报「无 key」）
+//         ③ 新增自定义供应商（OpenAI 公共协议，POST /llm/providers）
+// 数据源统一为 GET /llm/providers（内置 3 家 + 自定义注册表）。
+
+function openKeyMgmt() {
+  document.getElementById('keyMgmtOverlay').style.display = 'flex';
+  loadLlmCenter();
+}
+
+function closeKeyMgmt() {
+  document.getElementById('keyMgmtOverlay').style.display = 'none';
+  // 关闭时把配置中心可能变更的 active/注册表同步回 Step2 下拉
+  loadLlmServerConfig();
+}
+
+// XSS 防御：转义服务端数据后再插入 HTML（用于含结构化标签的场景）。
+// 对纯文本场景优先用 textContent（天然安全）。
+function _esc(s) {
+  let d = document.createElement('div');
+  d.textContent = s == null ? '' : String(s);
+  return d.innerHTML;
+}
+
+// 安全设置状态文本（textContent，天然防 XSS）
+function _setKeyStatus(envVar, text, color) {
+  let el = document.getElementById('keyStatus_' + envVar);
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = color || '';
+}
+
+// ---------- ① 当前模型 ----------
+function _renderCenterActive(data) {
+  let selP = document.getElementById('centerProvider');
+  let selM = document.getElementById('centerModel');
+  let dl = document.getElementById('centerModelList');
+  let info = document.getElementById('centerActiveInfo');
+  if (!selP || !selM) return;
+
+  selP.innerHTML = (data.providers || []).map(p =>
+    `<option value="${_esc(p.id)}" ${p.id===data.active_provider?'selected':''}>${_esc(p.label || p.id)}${p.builtin?'':'（自定义）'}</option>`
+  ).join('');
+
+  let active = (data.providers || []).find(p => p.id === data.active_provider);
+  selM.value = data.active_model || '';
+  if (dl && active) {
+    dl.innerHTML = (active.models || []).map(m => `<option value="${_esc(m)}"></option>`).join('');
+  }
+  if (info) {
+    info.textContent = (data.active_provider_valid === false ? '⚠️ 上次选择的供应商已失效，请重新选择；' : '')
+      + '当前生效：' + (active ? (active.label || active.id) : data.active_provider || '未设置')
+      + (data.active_model ? ' / ' + data.active_model : '');
+  }
+}
+
+function onCenterProviderChange() {
+  let pid = document.getElementById('centerProvider').value;
+  let info = getProviderInfo(pid);
+  let selM = document.getElementById('centerModel');
+  let dl = document.getElementById('centerModelList');
+  if (dl) dl.innerHTML = ((info && info.models) || []).map(m => `<option value="${_esc(m)}"></option>`).join('');
+  if (selM && info && info.models && info.models.length && !info.models.includes(selM.value)) {
+    selM.value = info.models[0];
+  }
+}
+
+// 测试当前选择的 provider+model（用服务端已存 key）
+async function testCenterActive() {
+  let statusEl = document.getElementById('centerActiveStatus');
+  let provider = document.getElementById('centerProvider')?.value;
+  let model = document.getElementById('centerModel')?.value.trim() || '';
+  if (!provider) return;
+  statusEl.textContent = '测试中...';
+  statusEl.style.color = 'var(--text-light)';
+  try {
+    let resp = await fetch('/llm/keys/test', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', ..._authHeaders()},
+      body: JSON.stringify({provider, model}),
+    });
+    let data = await resp.json();
+    if (data.ok) {
+      statusEl.textContent = '✅ 连接成功' + (data.key_source === 'stored' ? '（使用已保存的 Key）' : '');
+      statusEl.style.color = 'var(--success)';
+    } else {
+      statusEl.textContent = '❌ ' + (data.detail || data.error || '失败');
+      statusEl.style.color = 'var(--danger)';
+    }
+  } catch (e) {
+    statusEl.textContent = '❌ ' + e.message;
+    statusEl.style.color = 'var(--danger)';
+  }
+}
+
+// 保存当前选择为全局生效（服务端持久化，跨浏览器/重启）
+async function saveCenterActive() {
+  let statusEl = document.getElementById('centerActiveStatus');
+  let provider = document.getElementById('centerProvider')?.value;
+  let model = document.getElementById('centerModel')?.value.trim() || '';
+  if (!provider) return;
+  try {
+    let resp = await fetch('/llm/config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', ..._authHeaders()},
+      body: JSON.stringify({active_provider: provider, active_model: model}),
+    });
+    let data = await resp.json();
+    if (resp.ok) {
+      // 同步向导状态，Step2 立即生效
+      WizardState.provider = provider;
+      WizardState.model = model;
+      let info = getProviderInfo(provider);
+      WizardState.api_key_env = (info && info.api_key_env) || '';
+      saveWizardState();
+      statusEl.textContent = '✅ 已保存并设为当前使用';
+      statusEl.style.color = 'var(--success)';
+      // 刷新「当前生效」信息行，避免停留在旧值
+      let infoLine = document.getElementById('centerActiveInfo');
+      if (infoLine) infoLine.textContent = '当前生效：' + ((info && info.label) || provider) + (model ? ' / ' + model : '');
+      loadLlmKeyStatus();
+    } else {
+      statusEl.textContent = '❌ ' + (data.error || '保存失败');
+      statusEl.style.color = 'var(--danger)';
+    }
+  } catch (e) {
+    statusEl.textContent = '❌ ' + e.message;
+    statusEl.style.color = 'var(--danger)';
+  }
+}
+
+// ---------- ② 密钥管理 ----------
+function _renderCenterKeys(data) {
+  let body = document.getElementById('keyMgmtBody');
+  let warn = document.getElementById('keyMgmtWarning');
+  body.innerHTML = '';
+
+  if (data.permission_warning) {
+    warn.textContent = '⚠️ ' + data.permission_warning;
+    warn.style.display = 'block';
+  } else {
+    warn.style.display = 'none';
+  }
+
+  for (let p of (data.providers || [])) {
+    let safeId = p.id.replace(/[^A-Za-z0-9_]/g, '');  // id 安全化
+    let tr = document.createElement('tr');
+    tr.style.borderBottom = '1px solid var(--border)';
+
+    // Provider 列（名称 + id/类型小标）
+    let tdLabel = document.createElement('td');
+    tdLabel.style.cssText = 'padding:8px;font-weight:500;';
+    tdLabel.textContent = (p.label || p.id) + (p.builtin ? '' : '（自定义）');
+    let small = document.createElement('div');
+    small.style.cssText = 'font-size:11px;color:var(--text-light);font-weight:400;';
+    small.textContent = p.id;
+    tdLabel.appendChild(small);
+    tr.appendChild(tdLabel);
+
+    // 状态列
+    let tdStatus = document.createElement('td');
+    tdStatus.style.cssText = 'padding:8px;';
+    let statusSpan = document.createElement('span');
+    statusSpan.textContent = p.has_key ? '● 已配置' : '○ 未配置';
+    statusSpan.style.color = p.has_key ? 'var(--success)' : 'var(--text-light)';
+    tdStatus.appendChild(statusSpan);
+    tr.appendChild(tdStatus);
+
+    // 掩码列
+    let tdMasked = document.createElement('td');
+    tdMasked.style.cssText = 'padding:8px;font-family:monospace;font-size:12px;color:var(--text-light);';
+    tdMasked.textContent = p.masked || '—';
+    tr.appendChild(tdMasked);
+
+    // 新值输入列
+    let tdInput = document.createElement('td');
+    tdInput.style.cssText = 'padding:8px;';
+    let input = document.createElement('input');
+    input.type = 'password';
+    input.id = 'newKey_' + safeId;
+    input.placeholder = p.has_key ? '输入新 Key...' : '输入 API Key...';
+    input.style.cssText = 'width:150px;font-size:12px;padding:5px 8px;border-radius:4px;border:1px solid var(--border);';
+    tdInput.appendChild(input);
+    tr.appendChild(tdInput);
+
+    // 操作列（addEventListener 传参，杜绝 onclick 字符串拼接）
+    let tdAction = document.createElement('td');
+    tdAction.style.cssText = 'padding:8px;text-align:center;white-space:nowrap;';
+
+    let btnTest = document.createElement('button');
+    btnTest.textContent = '测试';
+    btnTest.style.cssText = 'font-size:12px;padding:4px 10px;border-radius:4px;border:1px solid var(--border);background:#F8FAFC;cursor:pointer;margin-right:4px;';
+    btnTest.addEventListener('click', function() { testKeyFromMgmt(safeId, p.id); });
+
+    let btnSave = document.createElement('button');
+    btnSave.textContent = '保存';
+    btnSave.style.cssText = 'font-size:12px;padding:4px 10px;border-radius:4px;border:none;background:var(--primary);color:#fff;cursor:pointer;margin-right:4px;';
+    btnSave.addEventListener('click', function() { saveKeyFromMgmt(safeId, p); });
+
+    tdAction.appendChild(btnTest);
+    tdAction.appendChild(btnSave);
+
+    // 自定义供应商支持删除（内置不可删）
+    if (!p.builtin) {
+      let btnDel = document.createElement('button');
+      btnDel.textContent = '删除';
+      btnDel.title = '删除该自定义供应商及其 Key';
+      btnDel.style.cssText = 'font-size:12px;padding:4px 10px;border-radius:4px;border:1px solid var(--danger);color:var(--danger);background:#fff;cursor:pointer;margin-right:4px;';
+      btnDel.addEventListener('click', function() { deleteCustomProvider(p.id, safeId); });
+      tdAction.appendChild(btnDel);
+    }
+
+    let statusEl = document.createElement('span');
+    statusEl.id = 'keyStatus_' + safeId;
+    statusEl.style.cssText = 'font-size:12px;margin-left:4px;';
+    tdAction.appendChild(statusEl);
+    tr.appendChild(tdAction);
+
+    body.appendChild(tr);
+  }
+}
+
+async function loadLlmCenter() {
+  let body = document.getElementById('keyMgmtBody');
+  try {
+    let data = await loadLlmProviders();
+    if (!data) throw new Error('HTTP 加载失败');
+    _renderCenterActive(data);
+    _renderCenterKeys(data);
+  } catch (e) {
+    let tr = document.createElement('tr');
+    let td = document.createElement('td');
+    td.colSpan = 5;
+    td.style.cssText = 'text-align:center;padding:20px;color:var(--danger);';
+    td.textContent = '加载失败: ' + e.message;
+    tr.appendChild(td);
+    body.innerHTML = '';
+    body.appendChild(tr);
+  }
+}
+
+// 测试：留空输入 = 用服务端已存 Key（后端按 provider 作用域回退），修复旧版误报「无 key」
+async function testKeyFromMgmt(safeId, provider) {
+  let inputEl = document.getElementById('newKey_' + safeId);
+  let newKey = inputEl ? inputEl.value.trim() : '';
+  let info = getProviderInfo(provider);
+  // model 取当前配置中心选中的模型，否则用该供应商首个建议模型
+  let model = document.getElementById('centerModel')?.value.trim() || '';
+  if (!model && info && info.models && info.models.length) model = info.models[0];
+  _setKeyStatus(safeId, '测试中...', 'var(--text-light)');
+
+  try {
+    let resp = await fetch('/llm/keys/test', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', ..._authHeaders()},
+      body: JSON.stringify({provider, api_key: newKey || '', model}),
+    });
+    let data = await resp.json();
+    if (data.ok) {
+      _setKeyStatus(safeId, '✅ 连接成功' + (data.key_source === 'stored' ? '（已存Key）' : ''), 'var(--success)');
+    } else {
+      _setKeyStatus(safeId, '❌ ' + (data.detail || data.error || '失败'), 'var(--danger)');
+    }
+  } catch (e) {
+    _setKeyStatus(safeId, '❌ ' + e.message, 'var(--danger)');
+  }
+}
+
+async function saveKeyFromMgmt(safeId, pInfo) {
+  let inputEl = document.getElementById('newKey_' + safeId);
+  let newKey = inputEl ? inputEl.value.trim() : '';
+  let envVar = pInfo.api_key_env;
+
+  if (!envVar) {
+    _setKeyStatus(safeId, '该供应商缺少 key 变量定义', 'var(--danger)');
+    return;
+  }
+  if (!newKey) {
+    _setKeyStatus(safeId, '请输入新 Key', 'var(--text-light)');
+    return;
+  }
+
+  _setKeyStatus(safeId, '保存中...', 'var(--text-light)');
+  try {
+    let resp = await fetch('/llm/keys', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', ..._authHeaders()},
+      body: JSON.stringify({keys: {[envVar]: newKey}}),
+    });
+    let data = await resp.json();
+    if (resp.ok) {
+      _setKeyStatus(safeId, '✅ 已保存', 'var(--success)');
+      if (inputEl) inputEl.value = '';
+      setTimeout(loadLlmCenter, 600);
+    } else {
+      _setKeyStatus(safeId, '❌ ' + (data.error || '保存失败'), 'var(--danger)');
+    }
+  } catch (e) {
+    _setKeyStatus(safeId, '❌ ' + e.message, 'var(--danger)');
+  }
+}
+
+// ---------- ③ 新增自定义供应商（OpenAI 公共协议） ----------
+async function createCustomProvider() {
+  let statusEl = document.getElementById('centerNewStatus');
+  let label = document.getElementById('centerNewLabel')?.value.trim() || '';
+  let baseUrl = document.getElementById('centerNewUrl')?.value.trim() || '';
+  let apiKey = document.getElementById('centerNewKey')?.value.trim() || '';
+  let modelsRaw = document.getElementById('centerNewModels')?.value.trim() || '';
+
+  if (!label || !baseUrl) {
+    statusEl.textContent = '请至少填写名称和接口地址';
+    statusEl.style.color = 'var(--warning)';
+    return;
+  }
+  statusEl.textContent = '创建中...';
+  statusEl.style.color = 'var(--text-light)';
+  try {
+    let resp = await fetch('/llm/providers', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', ..._authHeaders()},
+      body: JSON.stringify({label, base_url: baseUrl, api_key: apiKey, models: modelsRaw}),
+    });
+    let data = await resp.json();
+    if (resp.ok) {
+      statusEl.textContent = '✅ 已创建：' + (data.provider?.label || data.provider?.id);
+      statusEl.style.color = 'var(--success)';
+      document.getElementById('centerNewLabel').value = '';
+      document.getElementById('centerNewUrl').value = '';
+      document.getElementById('centerNewKey').value = '';
+      document.getElementById('centerNewModels').value = '';
+      setTimeout(loadLlmCenter, 500);
+    } else {
+      statusEl.textContent = '❌ ' + (data.error || '创建失败');
+      statusEl.style.color = 'var(--danger)';
+    }
+  } catch (e) {
+    statusEl.textContent = '❌ ' + e.message;
+    statusEl.style.color = 'var(--danger)';
+  }
+}
+
+async function deleteCustomProvider(pid, safeId) {
+  if (!confirm('确认删除自定义供应商「' + pid + '」及其密钥？')) return;
+  _setKeyStatus(safeId, '删除中...', 'var(--text-light)');
+  try {
+    let resp = await fetch('/llm/providers/' + encodeURIComponent(pid), {
+      method: 'DELETE',
+      headers: _authHeaders(),
+    });
+    let data = await resp.json();
+    if (resp.ok) {
+      _setKeyStatus(safeId, '✅ 已删除', 'var(--success)');
+      setTimeout(loadLlmCenter, 500);
+    } else {
+      _setKeyStatus(safeId, '❌ ' + (data.error || '删除失败'), 'var(--danger)');
+    }
+  } catch (e) {
+    _setKeyStatus(safeId, '❌ ' + e.message, 'var(--danger)');
+  }
+}
+
+function _authHeaders() {
+  let token = getToken();
+  return token ? {'Authorization': 'Bearer ' + token} : {};
+}
+
+init();
+</script>
+<!-- ===== LLM CONFIG CENTER MODAL（配置 + 密钥统一管理） ===== -->
+<div id="keyMgmtOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:9999;justify-content:center;align-items:center;">
+  <div style="background:#fff;border-radius:12px;width:780px;max-width:94vw;max-height:88vh;overflow-y:auto;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <h2 style="font-size:20px;font-weight:600;color:var(--text);">⚙️ LLM 配置中心</h2>
+      <button onclick="closeKeyMgmt()" style="border:none;background:none;font-size:24px;cursor:pointer;color:var(--text-light);">×</button>
+    </div>
+    <div id="keyMgmtWarning" style="display:none;margin-bottom:16px;padding:10px 14px;background:#FEF3C7;border-radius:8px;font-size:13px;color:#92400E;"></div>
+
+    <!-- ① 当前模型 -->
+    <h3 style="font-size:14px;font-weight:600;margin:0 0 10px;">① 当前模型 <span style="font-weight:400;font-size:12px;color:var(--text-sec);">（爬取与清洗使用，保存后全局生效）</span></h3>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
+      <select id="centerProvider" onchange="onCenterProviderChange()" style="flex:1;min-width:150px;"></select>
+      <input list="centerModelList" id="centerModel" placeholder="模型名（可自由输入）" style="flex:1.2;min-width:160px;" />
+      <datalist id="centerModelList"></datalist>
+      <button class="btn btn-sm btn-secondary" onclick="testCenterActive()">测试连接</button>
+      <button class="btn btn-sm btn-primary" onclick="saveCenterActive()">保存为当前使用</button>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:20px;">
+      <span id="centerActiveInfo" style="font-size:12px;color:var(--text-sec);"></span>
+      <span id="centerActiveStatus" style="font-size:12px;"></span>
+    </div>
+
+    <!-- ② 密钥管理 -->
+    <h3 style="font-size:14px;font-weight:600;margin:0 0 10px;">② 密钥管理</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead>
+        <tr style="border-bottom:2px solid var(--border);">
+          <th style="text-align:left;padding:8px;">供应商</th>
+          <th style="text-align:left;padding:8px;">状态</th>
+          <th style="text-align:left;padding:8px;">当前值（掩码）</th>
+          <th style="text-align:left;padding:8px;">新值</th>
+          <th style="text-align:center;padding:8px;">操作</th>
+        </tr>
+      </thead>
+      <tbody id="keyMgmtBody">
+        <tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-light);">加载中...</td></tr>
+      </tbody>
+    </table>
+    <div style="margin-top:10px;font-size:12px;color:var(--text-light);">
+      💡 留空点「测试」= 直接用服务端已保存的 Key 验证连通；填入新值可先「测试」再「保存」（立即生效，无需重启）。
+    </div>
+
+    <!-- ③ 新增自定义供应商 -->
+    <h3 style="font-size:14px;font-weight:600;margin:22px 0 10px;">③ 新增供应商 <span style="font-weight:400;font-size:12px;color:var(--text-sec);">（OpenAI 公共协议兼容）</span></h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+      <div>
+        <div style="font-size:12px;color:var(--text-sec);margin-bottom:4px;">名称 *</div>
+        <input type="text" id="centerNewLabel" placeholder="如：我的 vLLM / OneAPI 中转" style="width:100%;box-sizing:border-box;" />
+      </div>
+      <div>
+        <div style="font-size:12px;color:var(--text-sec);margin-bottom:4px;">API Key</div>
+        <input type="password" id="centerNewKey" placeholder="sk-...（可稍后在上方填写）" style="width:100%;box-sizing:border-box;" />
+      </div>
+      <div style="grid-column:1 / -1;">
+        <div style="font-size:12px;color:var(--text-sec);margin-bottom:4px;">接口地址 *（OpenAI 兼容，自动补全 /chat/completions）</div>
+        <input type="text" id="centerNewUrl" placeholder="如：https://api.example.com/v1" style="width:100%;box-sizing:border-box;" />
+      </div>
+      <div style="grid-column:1 / -1;">
+        <div style="font-size:12px;color:var(--text-sec);margin-bottom:4px;">模型列表（逗号分隔，选模型时的建议项）</div>
+        <input type="text" id="centerNewModels" placeholder="如：qwen-max, deepseek-v3, glm-4.6" style="width:100%;box-sizing:border-box;" />
+      </div>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+      <span id="centerNewStatus" style="font-size:12px;"></span>
+      <button class="btn btn-sm btn-primary" onclick="createCustomProvider()">创建并保存</button>
+    </div>
+    <div style="margin-top:10px;font-size:12px;color:var(--text-light);">
+      💡 适用于 vLLM / Ollama / OneAPI / 中转站等任何 OpenAI 兼容接口。本地/内网地址需服务端设置 <code>CRAWL4AI_ALLOW_INTERNAL_URLS=true</code>。
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
