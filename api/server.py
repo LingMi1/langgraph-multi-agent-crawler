@@ -23,6 +23,7 @@ FastAPI 服务化 — 把多 Agent 爬虫包成 REST 服务（提交任务 / 查
 import asyncio
 import csv
 import os
+import secrets
 import time
 import uuid
 from collections import deque
@@ -47,6 +48,8 @@ _TASK_ORDER: deque = deque(maxlen=20)        # 任务表上限（防内存涨，
 _LOG_RING: int = 4000                        # 每任务日志环形缓冲上限
 _SUBMIT_WINDOW: Dict[str, deque] = {}        # client -> 提交时间戳窗口（限流）
 _MAX_SUBMITS_PER_WINDOW = 6
+_STREAM_WINDOW: Dict[str, deque] = {}        # client -> SSE 连接时间戳窗口（防滥用）
+_MAX_STREAMS_PER_WINDOW = 30
 _WINDOW_SECONDS = 60.0
 
 
@@ -71,21 +74,30 @@ def _client_key(x_api_key: Optional[str], x_forwarded: Optional[str]) -> str:
     return x_api_key or "anon"
 
 
-def _check_submit_rate(client: str) -> None:
+def _check_sliding_rate(window: Dict[str, deque], client: str, limit: int, label: str) -> None:
+    """滑动窗口限流：limit 次/窗口秒，超限 429。submit 与 SSE 两条入口共用。"""
     now = time.monotonic()
-    win = _SUBMIT_WINDOW.setdefault(client, deque())
+    win = window.setdefault(client, deque())
     while win and now - win[0] > _WINDOW_SECONDS:
         win.popleft()
-    if len(win) >= _MAX_SUBMITS_PER_WINDOW:
+    if len(win) >= limit:
         retry = int(_WINDOW_SECONDS - (now - win[0])) + 1
-        raise HTTPException(429, f"提交过于频繁，{retry}s 后重试")
+        raise HTTPException(429, f"{label}，{retry}s 后重试")
     win.append(now)
 
 
+def _check_submit_rate(client: str) -> None:
+    _check_sliding_rate(_SUBMIT_WINDOW, client, _MAX_SUBMITS_PER_WINDOW, "提交过于频繁")
+
+
+def _check_stream_rate(client: str) -> None:
+    _check_sliding_rate(_STREAM_WINDOW, client, _MAX_STREAMS_PER_WINDOW, "SSE 连接过于频繁")
+
+
 def _check_api_key(x_api_key: Optional[str]) -> None:
-    """鉴权：CRAWLER_API_KEY 未配置 → 放行；配置 → 必须匹配。"""
+    """鉴权：CRAWLER_API_KEY 未配置 → 放行；配置 → 必须匹配（恒定时间比较防时序侧信道）。"""
     expected = os.environ.get("CRAWLER_API_KEY", "")
-    if expected and x_api_key != expected:
+    if expected and (x_api_key is None or not secrets.compare_digest(x_api_key, expected)):
         raise HTTPException(401, "无效或缺失的 X-API-Key")
 
 
@@ -209,16 +221,22 @@ async def task_results(task_id: str, limit: int = 200, x_api_key: Optional[str] 
 async def chat_stream_endpoint(
     req: ChatStreamRequest,
     x_api_key: Optional[str] = Header(None),
+    x_forwarded_for: Optional[str] = Header(None),
 ) -> StreamingResponse:
     """SSE 流式调用 LLM（text/event-stream）。
 
     故障转移/熔断/多 provider 全在 agents.llm_pipeline.chat_stream 内部完成，
-    这里只负责把产出片段包成 SSE 帧；prompt 为空或失败时只发 [DONE]。
+    这里只负责鉴权、限流与把产出片段包成 SSE 帧；prompt 为空或失败时只发 [DONE]。
     """
     _check_api_key(x_api_key)
+    _check_stream_rate(_client_key(x_api_key, x_forwarded_for))
     from agents.llm_pipeline import chat_stream
 
     async def _sse() -> AsyncIterator[str]:
+        if not req.prompt.strip():
+            # 空 prompt：无意义的 LLM 调用，直接短路（零成本）
+            yield "data: [DONE]\n\n"
+            return
         async for piece in chat_stream(
             req.system, req.prompt,
             temperature=req.temperature, max_tokens=req.max_tokens,

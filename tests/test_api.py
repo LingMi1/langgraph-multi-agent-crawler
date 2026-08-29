@@ -16,6 +16,7 @@ def client(monkeypatch):
     server._TASKS.clear()
     server._TASK_ORDER.clear()
     server._SUBMIT_WINDOW.clear()
+    server._STREAM_WINDOW.clear()
     monkeypatch.delenv("CRAWLER_API_KEY", raising=False)
 
     def _fake_crawl(target_url, concurrency=5, log_callback=None,
@@ -239,4 +240,37 @@ def test_chat_stream_sse_breaker_open_only_done(client, monkeypatch):
     assert r.status_code == 200
     assert r.text == "data: [DONE]\n\n"
     assert never.calls == 0
+    llm_breaker.reset()
+
+
+def test_chat_stream_empty_prompt_short_circuit(client, monkeypatch):
+    """空 prompt 必须短路：只发 [DONE]，且零 LLM 调用（不浪费一次无意义请求）。"""
+    from agents import llm_pipeline
+
+    class _Never:
+        def __init__(self):
+            self.calls = 0
+
+    never = _Never()
+    monkeypatch.setattr(llm_pipeline, "_get_llm", lambda: never)
+    r = client.post("/chat/stream", json={"prompt": "   "})
+    assert r.status_code == 200
+    assert r.text == "data: [DONE]\n\n"
+    assert never.calls == 0
+
+
+def test_chat_stream_rate_limit(client):
+    """SSE 独立限流窗口：超 _MAX_STREAMS_PER_WINDOW 次连接 → 429。"""
+    from agents.breaker import llm_breaker
+
+    llm_breaker.record_failure("f1")
+    llm_breaker.record_failure("f2")
+    llm_breaker.record_failure("f3")  # 开闸：每次请求零 LLM 调用，纯验证限流
+    limit = server._MAX_STREAMS_PER_WINDOW
+    for i in range(limit):
+        r = client.post("/chat/stream", json={"prompt": "hi"})
+        assert r.status_code == 200, f"第 {i + 1} 次应放行: {r.text[:80]}"
+    r = client.post("/chat/stream", json={"prompt": "hi"})
+    assert r.status_code == 429
+    assert "SSE" in r.json()["detail"]
     llm_breaker.reset()
