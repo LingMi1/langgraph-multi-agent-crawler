@@ -328,6 +328,13 @@ window.jsBeautify = jsBeautify;
         </div>
       </div>
       <p id="depthInfo" style="font-size:13px;color:var(--text-sec);margin-bottom:12px;"></p>
+      <div id="llmFailBanner" style="display:none;margin-bottom:12px;padding:12px 14px;background:#FEF3C7;border:1px solid #F59E0B;border-radius:8px;font-size:13px;color:#92400E;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span style="font-weight:600;">⚠️ LLM 连续调用失败，已降级为规则模式</span>
+          <button class="btn btn-sm btn-primary" style="margin-left:auto;" onclick="openKeyMgmt()">打开配置中心切换供应商</button>
+        </div>
+        <div id="llmFailReason" style="font-size:12px;color:var(--text-sec);margin-top:6px;word-break:break-all;"></div>
+      </div>
       <div id="logContainer" style="max-height:300px;overflow-y:auto;font-family:'SF Mono','Consolas','Liberation Mono',monospace;font-size:13px;"></div>
       <div style="margin-top:12px;display:flex;gap:8px;">
         <button class="btn btn-secondary" onclick="prevStep()">上一步</button>
@@ -708,6 +715,8 @@ async function startCrawl() {
   document.getElementById('depthInfo').textContent = '';
   document.getElementById('retryLabel').style.display = 'none';
   document.getElementById('nodeDetails').textContent = '';
+  let failBanner = document.getElementById('llmFailBanner');
+  if (failBanner) failBanner.style.display = 'none';
   renderDag();
 
   // 目标网址 = WizardState.urls（goStep2 已保存）或单 URL 兜底
@@ -763,6 +772,15 @@ async function startCrawl() {
   } finally {
     crawlRunning = false;
   }
+}
+
+// LLM 熔断横幅：提示用户去配置中心切换供应商（切换保存即解除熔断，爬取续跑）
+function showLlmFailBanner(detail) {
+  let banner = document.getElementById('llmFailBanner');
+  if (banner) banner.style.display = 'block';
+  let reasonEl = document.getElementById('llmFailReason');
+  if (reasonEl) reasonEl.textContent = detail ? ('原因：' + detail) : '';
+  if (typeof addLog === 'function') addLog('⚠️ LLM 连续调用失败，已降级为规则模式；可打开配置中心切换供应商后继续', 'error');
 }
 
 function handleSseEvent(evt) {
@@ -843,6 +861,10 @@ function handleSseEvent(evt) {
     case 'error':
       addLog('❌ '+esc(evt.message), 'error');
       document.getElementById('statusLabel').textContent = '错误';
+      break;
+    case 'llm_failed':
+      // LLM 熔断：提示用户切换供应商（爬取已降级为规则模式，切换保存后续跑）
+      showLlmFailBanner(evt.detail || '');
       break;
     case 'done':
       // done 事件携带 status：success / failed。
@@ -2193,8 +2215,11 @@ async function saveCenterActive() {
       let info = getProviderInfo(provider);
       WizardState.api_key_env = (info && info.api_key_env) || '';
       saveWizardState();
-      statusEl.textContent = '✅ 已保存并设为当前使用';
+      statusEl.textContent = '✅ 已保存并设为当前使用；若爬取正在进行，已自动解除熔断，将用新供应商继续';
       statusEl.style.color = 'var(--success)';
+      // 提示用户新配置即时生效（_sync_llm_config 会复位熔断器，支持切换续跑）
+      let failBanner = document.getElementById('llmFailBanner');
+      if (failBanner) failBanner.style.display = 'none';
       // 刷新「当前生效」信息行，避免停留在旧值
       let infoLine = document.getElementById('centerActiveInfo');
       if (infoLine) infoLine.textContent = '当前生效：' + ((info && info.label) || provider) + (model ? ' / ' + model : '');

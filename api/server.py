@@ -329,6 +329,14 @@ class LlmKeyTestRequest(BaseModel):
     model: str = Field("")
 
 
+class LlmProviderCreateRequest(BaseModel):
+    """新增自定义 OpenAI 兼容供应商。"""
+    label: str = Field("")
+    base_url: str = Field("")
+    api_key: str = Field("")
+    models: str = Field("")
+
+
 class SaveContentRequest(BaseModel):
     content: str = Field("")
 
@@ -345,6 +353,57 @@ def _load_config() -> Dict[str, Any]:
 def _save_config(cfg: Dict[str, Any]) -> None:
     with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+
+# ── LLM 多供应商注册表（内置预设 base_url 锁定，仅 key/模型可改） ──
+_BUILTIN_PROVIDERS: List[Dict[str, Any]] = [
+    {"id": "zhipu", "label": "智谱 GLM", "builtin": True,
+     "base_url": "https://open.bigmodel.cn/api/paas/v4",
+     "api_key_env": "ZHIPU_API_KEY",
+     "models": ["glm-4-flash", "glm-5.2", "glm-5.1", "glm-4", "glm-3-turbo"]},
+    {"id": "deepseek", "label": "DeepSeek", "builtin": True,
+     "base_url": "https://api.deepseek.com",
+     "api_key_env": "DEEPSEEK_API_KEY",
+     "models": ["deepseek-chat", "deepseek-reasoner"]},
+    {"id": "openai", "label": "OpenAI", "builtin": True,
+     "base_url": "https://api.openai.com/v1",
+     "api_key_env": "OPENAI_API_KEY",
+     "models": ["gpt-4o", "gpt-4o-mini", "gpt-4.1-mini"]},
+]
+
+
+def _mask_key(key: str) -> str:
+    if not key:
+        return ""
+    return (key[:6] + "***" + key[-4:]) if len(key) > 10 else "***"
+
+
+def _get_provider_list(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """内置预设 + 自定义供应商合并。key 解析：saved_keys[env] 优先，
+    active 供应商回退顶层 api_key（兼容旧 config.json 直接填 key 的用法）。
+    返回的条目含明文 "key"（内部用），对外接口需剔除。
+    """
+    saved = cfg.get("saved_keys") or {}
+    active_pid = cfg.get("active_provider") or "deepseek"
+    top_key = str(cfg.get("api_key", "") or "")
+    out: List[Dict[str, Any]] = []
+    for p in _BUILTIN_PROVIDERS:
+        env = p["api_key_env"]
+        key = saved.get(env, "")
+        if p["id"] == active_pid and not key:
+            key = top_key
+        out.append({**p, "key": key})
+    for c in cfg.get("llm_providers") or []:
+        env = c.get("api_key_env", "")
+        key = saved.get(env, "")
+        if c.get("id") == active_pid and not key:
+            key = top_key
+        out.append({**c, "builtin": False, "key": key})
+    return out
+
+
+def _find_provider(cfg: Dict[str, Any], pid: str) -> Optional[Dict[str, Any]]:
+    return next((p for p in _get_provider_list(cfg) if p["id"] == pid), None)
 
 
 def _sync_llm_config() -> None:
@@ -377,6 +436,10 @@ def _sync_llm_config() -> None:
             from agents.llm_pipeline import reset_llm
 
             reset_llm()
+            # 切换供应商后解除本 run 熔断 → 正在进行的爬取用新配置继续（切换 LLM 续跑）
+            from agents.breaker import llm_breaker
+
+            llm_breaker.reset()
         except Exception:  # noqa: BLE001 — 桥接失败不阻断配置保存
             pass
 
@@ -493,90 +556,120 @@ def _import_rows_to_sqlite(rows: List[Dict[str, Any]], db_path: str) -> Dict[str
     }
 
 
-# ── LLM 配置中心 ──
+# ── LLM 配置中心（多供应商：内置 3 家 + 自定义 OpenAI 兼容） ──
 @app.get("/llm/providers")
 async def llm_providers(
     x_api_key: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
 ) -> Dict[str, Any]:
-    """把 config.json 收敛成博宇格式：单供应商 deepseek + 当前 model。"""
+    """返回全部供应商（内置+自定义，key 只回掩码）+ 当前 active 供应商/模型。"""
     _check_api_key(_extract_key(x_api_key, authorization))
     cfg = _load_config()
-    api_key = str(cfg.get("api_key", "") or "")
-    model = str(cfg.get("model_name", "") or "") or "deepseek-v4-flash"
-    masked = (api_key[:6] + "***" + api_key[-4:]) if api_key else ""
-    providers = [{
-        "id": "deepseek",
-        "label": str(cfg.get("platform", "") or "DeepSeek"),
-        "builtin": True,
-        "has_key": bool(api_key),
-        "masked": masked,
-        "api_key_env": "DEEPSEEK_API_KEY",
-        "models": [model] if model else ["deepseek-chat"],
-    }]
+    providers = []
+    for p in _get_provider_list(cfg):
+        providers.append({
+            "id": p["id"], "label": p["label"], "builtin": bool(p.get("builtin")),
+            "api_key_env": p["api_key_env"], "base_url": p["base_url"],
+            "models": p.get("models") or [],
+            "has_key": bool(p["key"]), "masked": _mask_key(p["key"]),
+        })
+    active_pid = cfg.get("active_provider") or "deepseek"
+    active_model = str(cfg.get("model_name", "") or "") or "deepseek-v4-flash"
+    active = _find_provider(cfg, active_pid)
     return {
         "providers": providers,
-        "active_provider": "deepseek",
-        "active_model": model,
-        "active_provider_valid": True,
+        "active_provider": active_pid,
+        "active_model": active_model,
+        "active_provider_valid": active is not None,
         "permission_warning": "",
     }
 
 
-@app.post("/llm/config")
+@app.post("/llm/config", response_model=None)
 async def llm_config_save(
     req: LlmConfigRequest,
     x_api_key: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
-) -> Dict[str, Any]:
+) -> Union[Dict[str, Any], JSONResponse]:
+    """保存 active 供应商 + 模型 → 顶层 base_url/api_key/platform 与该供应商对齐（爬虫主用）。"""
     _check_api_key(_extract_key(x_api_key, authorization))
     cfg = _load_config()
+    if req.active_provider:
+        provider = _find_provider(cfg, req.active_provider)
+        if provider is None:
+            return JSONResponse(status_code=400,
+                                content={"error": f"供应商 {req.active_provider} 不存在"})
+        saved = cfg.setdefault("saved_keys", {})
+        # 切换前捕获旧 active 的 key（避免只存在于顶层的 key 丢失）
+        old_pid = cfg.get("active_provider") or "deepseek"
+        old_provider = _find_provider(cfg, old_pid)
+        if old_provider and cfg.get("api_key") and not saved.get(old_provider["api_key_env"]):
+            saved[old_provider["api_key_env"]] = str(cfg["api_key"])
+        # 切到新供应商：base_url/平台名取自该供应商；api_key 取该供应商已存 key
+        cfg["active_provider"] = provider["id"]
+        cfg["base_url"] = provider["base_url"]
+        cfg["api_key"] = saved.get(provider["api_key_env"], "")
+        cfg["platform"] = provider["label"]
     if req.active_model:
-        cfg["model_name"] = req.active_model
+        cfg["model_name"] = req.active_model.strip()
     _save_config(cfg)
     _sync_llm_config()
     return {"ok": True, "error": ""}
 
 
-@app.post("/llm/keys")
+@app.post("/llm/keys", response_model=None)
 async def llm_keys_save(
     req: LlmKeysRequest,
     x_api_key: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
 ) -> Dict[str, Any]:
-    """保存 key → 写回 config.json 的 api_key（单供应商模式，任意 env 名都生效）。"""
+    """按供应商 env 保存 key 到 saved_keys；若是当前 active 供应商 → 同步顶层 api_key。"""
     _check_api_key(_extract_key(x_api_key, authorization))
     cfg = _load_config()
-    saved_keys = cfg.setdefault("saved_keys", {})
+    saved = cfg.setdefault("saved_keys", {})
+    active_pid = cfg.get("active_provider") or "deepseek"
     for env, key in req.keys.items():
-        if key.strip():
-            cfg["api_key"] = key.strip()
-            saved_keys[env] = key.strip()
+        key = key.strip()
+        if not key:
+            continue
+        saved[env] = key
+        provider = next((p for p in _get_provider_list(cfg)
+                         if p["api_key_env"] == env), None)
+        if provider and provider["id"] == active_pid:
+            cfg["api_key"] = key
     _save_config(cfg)
     _sync_llm_config()
     return {"ok": True, "error": ""}
 
 
-@app.post("/llm/keys/test")
+@app.post("/llm/keys/test", response_model=None)
 async def llm_keys_test(
     req: LlmKeyTestRequest,
     x_api_key: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
 ) -> Dict[str, Any]:
-    """真实连通测试：config.base_url + (输入的 key 或已存 key) 发一次最小 chat 请求。"""
+    """真实连通测试：目标供应商 base_url + (输入的 key 或已存 key) 发一次最小 chat 请求。"""
     _check_api_key(_extract_key(x_api_key, authorization))
     import httpx
 
     cfg = _load_config()
-    base_url = str(cfg.get("base_url", "") or "").rstrip("/")
-    api_key = req.api_key.strip() or str(cfg.get("api_key", "") or "")
-    model = req.model.strip() or str(cfg.get("model_name", "") or "") or "deepseek-v4-flash"
+    active_pid = cfg.get("active_provider") or "deepseek"
+    target_pid = req.provider or active_pid
+    provider = _find_provider(cfg, target_pid)
+    base_url = (provider or {}).get("base_url") or str(cfg.get("base_url", "") or "")
+    env = (provider or {}).get("api_key_env", "DEEPSEEK_API_KEY")
+    saved = cfg.get("saved_keys") or {}
+    api_key = req.api_key.strip() or saved.get(env, "") or (
+        str(cfg.get("api_key", "") or "") if target_pid == active_pid else ""
+    )
+    model = req.model.strip() or str(cfg.get("model_name", "") or "") or (
+        (provider or {}).get("models") or ["deepseek-chat"])[0]
     if not base_url or not api_key:
         return {"ok": False, "detail": "缺少 base_url 或 API Key", "key_source": ""}
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
-                f"{base_url}/chat/completions",
+                f"{base_url.rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}"},
                 json={"model": model, "messages": [{"role": "user", "content": "ping"}],
                       "max_tokens": 8},
@@ -589,25 +682,64 @@ async def llm_keys_test(
         return {"ok": False, "detail": f"{type(e).__name__}: {e}", "key_source": ""}
 
 
-@app.post("/llm/providers")
+@app.post("/llm/providers", response_model=None)
 async def llm_provider_create(
+    req: LlmProviderCreateRequest,
     x_api_key: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
-) -> JSONResponse:
-    """只读收敛：boyushixi 为单供应商（config.json），不支持注册自定义供应商。"""
+) -> Union[Dict[str, Any], JSONResponse]:
+    """新增自定义 OpenAI 兼容供应商（OpenAI 公共协议）。"""
     _check_api_key(_extract_key(x_api_key, authorization))
-    return JSONResponse(status_code=400, content={
-        "error": "当前为单供应商模式（配置存于 config.json），不支持新增自定义供应商"})
+    cfg = _load_config()
+    label = (req.label or "").strip()
+    base_url = (req.base_url or "").strip().rstrip("/")
+    if not label or not base_url:
+        return JSONResponse(status_code=400, content={"error": "请填写名称和接口地址"})
+    if not base_url.startswith(("http://", "https://")):
+        return JSONResponse(status_code=400, content={"error": "接口地址需以 http(s):// 开头"})
+    slug = re.sub(r"[^a-zA-Z0-9]+", "_", label).strip("_").lower() or "custom"
+    pid = slug
+    existing = {p["id"] for p in _get_provider_list(cfg)}
+    n = 1
+    while pid in existing:
+        n += 1
+        pid = f"{slug}_{n}"
+    env = "LLM_CUSTOM_" + pid.upper()
+    models = [m.strip() for m in re.split(r"[,，]", req.models or "") if m.strip()] \
+        or ["deepseek-chat"]
+    providers = cfg.setdefault("llm_providers", [])
+    providers.append({
+        "id": pid, "label": label, "base_url": base_url,
+        "api_key_env": env, "models": models,
+    })
+    if (req.api_key or "").strip():
+        cfg.setdefault("saved_keys", {})[env] = req.api_key.strip()
+    _save_config(cfg)
+    _sync_llm_config()
+    return {"ok": True, "provider": {"id": pid, "label": label}}
 
 
-@app.delete("/llm/providers/{pid}")
+@app.delete("/llm/providers/{pid}", response_model=None)
 async def llm_provider_delete(
     pid: str,
     x_api_key: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
-) -> JSONResponse:
+) -> Union[Dict[str, Any], JSONResponse]:
+    """删除自定义供应商（含其 key）；内置或当前使用中的供应商不可删。"""
     _check_api_key(_extract_key(x_api_key, authorization))
-    return JSONResponse(status_code=400, content={"error": "内置供应商不可删除"})
+    cfg = _load_config()
+    providers = cfg.get("llm_providers") or []
+    target = next((p for p in providers if p["id"] == pid), None)
+    if target is None:
+        return JSONResponse(status_code=400, content={"error": "仅支持删除自定义供应商"})
+    if cfg.get("active_provider") == pid:
+        return JSONResponse(status_code=400,
+                            content={"error": "当前正在使用的供应商不可删除，请先在「当前模型」切换到其他供应商"})
+    cfg["llm_providers"] = [p for p in providers if p["id"] != pid]
+    (cfg.get("saved_keys") or {}).pop(target.get("api_key_env", ""), None)
+    _save_config(cfg)
+    _sync_llm_config()
+    return {"ok": True}
 
 
 # ── 结果浏览 / 保存 ──
@@ -961,6 +1093,21 @@ async def _run_crawl_stream(task: Dict[str, Any], req: OrchestratorStreamRequest
         task["logs"].append(str(msg))
 
     any_failed = False
+    llm_failed_emitted = False
+
+    def _notify_llm_failed() -> None:
+        """熔断打开 → 一次性通知前端提示用户切换供应商（爬取本身继续降级运行）。"""
+        nonlocal llm_failed_emitted
+        if llm_failed_emitted:
+            return
+        try:
+            from agents.breaker import llm_breaker
+        except Exception:
+            return
+        if llm_breaker.open:
+            llm_failed_emitted = True
+            emit({"type": "llm_failed", "detail": (llm_breaker.reason or "")[:300]})
+
     for i, url in enumerate(urls):
         domain = _domain_of(url)
         state = {"node": None, "saw_fetch": False, "attempt": 1, "fetched": 0,
@@ -970,6 +1117,7 @@ async def _run_crawl_stream(task: Dict[str, Any], req: OrchestratorStreamRequest
 
         def _progress(fetched: int, queue_len: int, u: str, phase: str,
                       _state: Dict[str, Any] = state, _domain: str = domain) -> None:
+            _notify_llm_failed()  # 每次进度回调顺带检查 LLM 熔断 → 通知前端
             node = _NODE_BY_PHASE.get(phase, "crawl")
             if node == "clean":
                 _state["saw_clean"] = True
@@ -1012,6 +1160,7 @@ async def _run_crawl_stream(task: Dict[str, Any], req: OrchestratorStreamRequest
             task["logs"].append(f"[api] {url} 爬取失败: {task['error']}")
 
         # 该站收尾：关掉当前节点 → finalize（带 result_dir）→ 下一站
+        _notify_llm_failed()
         rows = _read_csv_rows(domain)
         if state.get("saw_clean") and state["node"] == "finalize":
             # _progress 阶段 CSV 尚未落盘，clean_stats.total 为 0；此处用真实行数补发
