@@ -41,15 +41,11 @@
 
 ## 界面截图
 
-对 [hnbn666.cn](http://www.hnbn666.cn/)（RuiQiCMS 可视化建站模板）的一次真实采集——通过 CLI、FastAPI 服务与桌面 GUI 驱动：
+对 [hnbn666.cn](http://www.hnbn666.cn/)（RuiQiCMS 可视化建站模板）的一次真实采集——通过 Web 工作台：
 
-| 第一步 · CLI 命令行爬取 — 实时节点日志 | 第二步 · Web 爬取控制台 — SSE 实时进度 + DAG 流程可视化 |
+| 第一步 · 输入目标网址 — 一键开始 | 第二步 · 爬取控制台 — SSE 实时进度 + DAG 流程可视化 |
 |---|---|
-| ![CLI 终端](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/cli-terminal.png) | ![爬取控制台](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/crawl-console.png) |
-
-| 桌面 GUI (tkinter) — 批量导入 URL + 逐站爬取 |
-|---|
-| ![桌面 GUI](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/gui-desktop.png) |
+| ![输入网址](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/web-start.png) | ![爬取控制台](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/web-console.png) |
 
 ## 系统架构
 

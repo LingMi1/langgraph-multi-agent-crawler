@@ -39,15 +39,11 @@ This project is my answer: a supervisor graph with plan-and-execute and a review
 
 ## Screenshots
 
-A real crawl of [hnbn666.cn](http://www.hnbn666.cn/) (RuiQiCMS visual-builder template) through the CLI, the FastAPI service, and the desktop GUI:
+A real crawl of [hnbn666.cn](http://www.hnbn666.cn/) (RuiQiCMS visual-builder template) through the web workbench:
 
-| Step 1 · CLI crawl — real-time node logs | Step 2 · Web crawl console — SSE live progress + DAG visualization |
+| Step 1 · Enter the target URL — one-click start | Step 2 · Crawl console — SSE live progress + DAG visualization |
 |---|---|
-| ![cli terminal](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/cli-terminal.png) | ![crawl console](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/crawl-console.png) |
-
-| Desktop GUI (tkinter) — batch URL import + per-site crawl |
-|---|
-| ![desktop gui](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/gui-desktop.png) |
+| ![web start](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/web-start.png) | ![web console](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/web-console.png) |
 
 ## Architecture
 

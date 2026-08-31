@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; background: #1e1e1e; }
+  body { display: flex; align-items: center; justify-content: center; height: 100vh; }
+  .win {
+    width: 1140px; background: #1e1e1e; border: 1px solid #3c3c3c;
+    border-radius: 10px; overflow: hidden; box-shadow: 0 8px 32px rgba(0,0,0,.5);
+  }
+  .titlebar {
+    background: #2d2d2d; padding: 10px 14px; display: flex; align-items: center; gap: 8px;
+  }
+  .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+  .r { background: #ff5f57; } .y { background: #febc2e; } .g { background: #28c840; }
+  .title { color: #cccccc; font: 12px/1 Consolas, monospace; margin-left: 8px; }
+  .term {
+    padding: 14px 16px 18px; font: 12.5px/1.55 Consolas, "Courier New", monospace;
+    color: #d4d4d4; white-space: pre-wrap; word-break: break-all;
+    max-height: 620px; overflow: hidden;
+  }
+</style>
+</head>
+<body>
+<div class="win">
+  <div class="titlebar">
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="title">langgraph-multi-agent-crawler — CLI crawl (hnbn666.cn)</span>
+  </div>
+  <div class="term"><div>﻿python : 2026-08-31 12:21:24 | INFO    | agent_crawler | [Graph::llm_locate] 已加载持久化选择器缓存 154 条</div>
+<div>At C:\Users\Administrator\AppData\Local\Temp\trae-agent-toolhost\jobs\job-b7b2f3d819884b1c97d1817d7a93ccc6\command.ps1:</div>
+<div>15 char:9173</div>
+<div>+ ... node_modules\@vscode\ripgrep\bin&#x27;; python _cli_demo.py *&gt; cli_log.txt</div>
+<div>+                                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~</div>
+<div>    + CategoryInfo          : NotSpecified: (2026-08-31 12:2...载持久化选择器缓存 154 条:String) [], RemoteException</div>
+<div>    + FullyQualifiedErrorId : NativeCommandError</div>
+<div> </div>
+<div>2026-08-31 12:21:24 | INFO    | agent_crawler | [Graph::workflow] Supervisor 图已编译 | trace=落盘</div>
+<div>2026-08-31 12:21:24 | INFO    | agent_crawler | [Graph::scout] 分析站点: http://www.hnbn666.cn/</div>
+<div>2026-08-31 12:21:24 | INFO    | agent_crawler | [ScoutAgent] 开始分析站点: http://www.hnbn666.cn/</div>
+<div>2026-08-31 12:21:24 | INFO    | agent_crawler | [ScoutAgent] 分析完成 | js=False | type=portal | anti_crawl=low | html_len=</div>
+<div>37765</div>
+<div>2026-08-31 12:21:24 | INFO    | agent_crawler | [Graph::scout] 完成 | title=首页 - 河南邦农种业有限公司 | js=False | type=portal</div>
+<div>2026-08-31 12:21:24 | INFO    | agent_crawler | UrlMemory 初始化完成 | db=E:\新建文件夹\boyushixi\1(6)\1\agent_memory.db</div>
+<div>2026-08-31 12:21:24 | INFO    | agent_crawler | [Agent::scout] 经验记忆命中 | www.hnbn666.cn | type=portal | js=False</div>
+<div>2026-08-31 12:21:24 | INFO    | agent_crawler | [Agent::scout] 计划产出 | type=portal | js=False | hints=[]</div>
+<div>2026-08-31 12:21:24 | INFO    | agent_crawler | [Graph::navigate] 抓取首页: http://www.hnbn666.cn/</div>
+<div>2026-08-31 12:21:24 | INFO    | agent_crawler | [FetcherRouter] 缓存命中: http://www.hnbn666.cn/</div>
+<div>2026-08-31 12:21:24 | INFO    | agent_crawler | [Graph::navigate] 首页抓取成功 | method=cached | html_len=37765</div>
+<div>2026-08-31 12:21:25 | INFO    | agent_crawler | [FetcherRouter] Playwright Chromium 已启动</div>
+<div>2026-08-31 12:21:29 | INFO    | agent_crawler | [Stealth Check] webdriver=False, plugins=3, chrome.runtime=存在</div>
+<div>2026-08-31 12:21:29 | INFO    | agent_crawler | [NavAgent] 链路提取完成 | 原始=6 | 过滤后=6 (详情页)</div>
+<div>2026-08-31 12:21:29 | INFO    | agent_crawler | [Graph::navigate] 导航链接: 6 个</div>
+<div>2026-08-31 12:21:29 | INFO    | agent_crawler | [Graph::navigate] 一级导航映射登记 5 条 → URL注册表 (样例: [(&#x27;公司简介&#x27;, &#x27;/001_about&#x27;), (</div>
+<div>&#x27;产品展示&#x27;, &#x27;/002_product&#x27;), (&#x27;资讯中心&#x27;, &#x27;/003_new&#x27;)])</div>
+<div>2026-08-31 12:21:29 | INFO    | agent_crawler | [Graph::navigate] 入队 6 个链接</div>
+<div>2026-08-31 12:21:29 | INFO    | agent_crawler | [Agent::navigate] 计划更新 | 栏目=5 个 | 入队=6</div>
+<div>2026-08-31 12:21:29 | INFO    | agent_crawler | [Graph::fetch_extract] depth=1 | http://www.hnbn666.cn/index.html</div>
+<div>2026-08-31 12:21:29 | INFO    | agent_crawler | [FetcherRouter] 缓存命中: http://www.hnbn666.cn/index.html</div>
+<div>2026-08-31 12:21:29 | INFO    | agent_crawler | [Graph::fetch_extract] depth=1 | http://www.hnbn666.cn/001_about.html</div>
+<div>2026-08-31 12:21:29 | INFO    | agent_crawler | [FetcherRouter] 缓存命中: http://www.hnbn666.cn/001_about.html</div>
+<div>2026-08-31 12:21:29 | INFO    | agent_crawler | [Graph::fetch_extract] depth=1 | http://www.hnbn666.cn/002_product.html</div>
+<div>2026-08-31 12:21:29 | INFO    | agent_crawler | [FetcherRouter] 缓存命中: http://www.hnbn666.cn/002_product.html</div>
+<div>2026-08-31 12:21:31 | INFO    | agent_crawler | [Graph::fetch_extract] rzq 模板站统一补链 +5 (depth=1→2) | http://www.hnbn666.</div>
+<div>cn/index.html</div>
+<div>2026-08-31 12:21:31 | INFO    | agent_crawler | [Graph::fetch_extract] 列表页 depth=1 → +1 子链接 | reason=链接密度过高 (0.0811); 正</div>
+<div>文过短(296字)且链接过多(24)</div>
+<div>2026-08-31 12:21:31 | INFO    | agent_crawler | [Graph::fetch_extract] 列表页使用 BS4 清洗(跳过 LLM 深降级) | http://www.hnbn666.cn</div>
+<div>/002_product.html</div>
+<div>2026-08-31 12:21:31 | INFO    | agent_crawler | [Graph::fetch_extract] 正文过短入抢救队列(16字) | rescue_queue=1 | http://www.hnb</div>
+<div>n666.cn/002_product.html</div>
+<div>2026-08-31 12:21:31 | INFO    | agent_crawler | [Graph::fetch_extract] 正文过短(16字)，丢弃 | http://www.hnbn666.cn/002_product</div>
+<div>.html</div>
+<div>2026-08-31 12:21:31 | INFO    | agent_crawler | [ExtractorAgent] 清洗完成 | method=trafilatura | confidence=0.90 | html_len</div>
+<div>=4043 | imgs=16 | hash=831caa11 | url=http://www.hnbn666.cn/index.html</div>
+<div>2026-08-31 12:21:31 | INFO    | agent_crawler | [Graph::clean] 去除导航栏残留 3 处</div>
+<div>2026-08-31 12:21:31 | INFO    | agent_crawler | [Graph::fetch_extract] detail 页正文异常(text=2字, links=0)，不落盘 | http://www.</div></div>
+</div>
+</body>
+</html>
