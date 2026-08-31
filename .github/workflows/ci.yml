@@ -29,7 +29,8 @@ jobs:
       - name: 单元测试（safety / plan / BaseAgent / 工具 / 记账 / ReAct / 去重 / 图装配冒烟）
         run: python -m pytest tests -q
 
-      - name: 覆盖率（核心包 agents/graph/distributed/api ≥ 60%，渐进加码）
+      - name: 覆盖率（核心包 agents/graph/distributed/api ≥ 60%，渐进加码；仅 3.12 腿统计，3.13 coverage 的 sys.monitoring 统计口径不同会误伤阈值）
+        if: matrix.python-version == '3.12'
         run: python -m pytest tests -q --cov=agents --cov=graph --cov=distributed --cov=api --cov-fail-under=60 --cov-report=term-missing
 
       - name: 静态检查（自研 stdlib 版：F401/F403/F811/F821 + ANNO 注解完备性门禁）
