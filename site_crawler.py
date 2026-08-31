@@ -5,12 +5,11 @@
 import os
 import re
 import time
-import json
 import requests
 import urllib3
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, urlunparse
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
