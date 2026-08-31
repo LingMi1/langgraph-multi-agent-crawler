@@ -45,11 +45,11 @@
 
 | 爬取控制台 — SSE 实时进度 + DAG 流程可视化 | 查看结果 — 按栏目层级的结果树 |
 |---|---|
-| ![爬取控制台](screenshots/crawl-console.png) | ![查看结果](screenshots/results-tree.png) |
+| ![爬取控制台](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/crawl-console.png) | ![查看结果](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/results-tree.png) |
 
 | 渲染预览 — 清洗后的页面 | 保存全部结果 .zip |
 |---|---|
-| ![渲染预览](screenshots/page-preview.png) | ![保存全部结果](screenshots/save-all-results.png) |
+| ![渲染预览](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/page-preview.png) | ![保存全部结果](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/save-all-results.png) |
 
 ## 系统架构
 

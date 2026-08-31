@@ -43,11 +43,11 @@ A real crawl of [hnbn666.cn](http://www.hnbn666.cn/) (RuiQiCMS visual-builder te
 
 | Crawl console — SSE live progress + DAG visualization | Result tree — section hierarchy |
 |---|---|
-| ![crawl console](screenshots/crawl-console.png) | ![result tree](screenshots/results-tree.png) |
+| ![crawl console](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/crawl-console.png) | ![result tree](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/results-tree.png) |
 
 | Cleaned page preview | Save all results as `.zip` |
 |---|---|
-| ![page preview](screenshots/page-preview.png) | ![save all results](screenshots/save-all-results.png) |
+| ![page preview](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/page-preview.png) | ![save all results](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/save-all-results.png) |
 
 ## Architecture
 
