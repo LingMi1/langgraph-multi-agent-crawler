@@ -41,15 +41,19 @@
 
 ## 界面截图
 
-对 [hnbn666.cn](http://www.hnbn666.cn/)（RuiQiCMS 可视化建站模板）的一次真实采集，通过 FastAPI 服务驱动：
+对 [hnbn666.cn](http://www.hnbn666.cn/)（RuiQiCMS 可视化建站模板）的一次真实采集，覆盖 CLI / FastAPI 服务 / 桌面小工具三个入口：
 
-| 爬取控制台 — SSE 实时进度 + DAG 流程可视化 | 查看结果 — 按栏目层级的结果树 |
+| 第一步 · CLI 爬取 — 实时节点日志 | 第二步 · Web 爬取控制台 — SSE 实时进度 |
 |---|---|
-| ![爬取控制台](screenshots/crawl-console.png) | ![查看结果](screenshots/results-tree.png) |
+| ![CLI 终端](screenshots/cli-terminal.png) | ![爬取控制台](screenshots/crawl-console.png) |
 
-| 渲染预览 — 清洗后的页面 | 保存全部结果 .zip |
+| 第二步 · 查看结果 — 栏目层级树 | 第二步 · 渲染预览 — 清洗后页面 |
 |---|---|
-| ![渲染预览](screenshots/page-preview.png) | ![保存全部结果](screenshots/save-all-results.png) |
+| ![查看结果](screenshots/results-tree.png) | ![渲染预览](screenshots/page-preview.png) |
+
+| 桌面小工具（tkinter）— 批量导入网址 + 逐站爬取 |
+|---|
+| ![桌面小工具](screenshots/gui-desktop.png) |
 
 ## 系统架构
 

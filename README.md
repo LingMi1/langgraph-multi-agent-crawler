@@ -39,15 +39,19 @@ This project is my answer: a supervisor graph with plan-and-execute and a review
 
 ## Screenshots
 
-A real crawl of [hnbn666.cn](http://www.hnbn666.cn/) (RuiQiCMS visual-builder template) through the FastAPI service:
+A real crawl of [hnbn666.cn](http://www.hnbn666.cn/) (RuiQiCMS visual-builder template) through the CLI, the FastAPI service, and the desktop GUI:
 
-| Crawl console — SSE live progress + DAG visualization | Result tree — section hierarchy |
+| Step 1 · CLI crawl — real-time node logs | Step 2 · Web crawl console — SSE live progress |
 |---|---|
-| ![crawl console](screenshots/crawl-console.png) | ![result tree](screenshots/results-tree.png) |
+| ![cli terminal](screenshots/cli-terminal.png) | ![crawl console](screenshots/crawl-console.png) |
 
-| Cleaned page preview | Save all results as `.zip` |
+| Step 2 · Result tree — section hierarchy | Step 2 · Cleaned page preview |
 |---|---|
-| ![page preview](screenshots/page-preview.png) | ![save all results](screenshots/save-all-results.png) |
+| ![result tree](screenshots/results-tree.png) | ![page preview](screenshots/page-preview.png) |
+
+| Desktop GUI (tkinter) — batch URL import + per-site crawl |
+|---|
+| ![desktop gui](screenshots/gui-desktop.png) |
 
 ## Architecture
 
