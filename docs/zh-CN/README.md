@@ -1,6 +1,6 @@
-# boyushixi 文档（简体中文）
+# LangGraph 多智能体网页采集器 文档（简体中文）
 
-欢迎。boyushixi 是一个确定性优先的多 Agent 网页采集器：9 个专职 Agent 由 LangGraph 监督者编排，LLM 只是增强项——绝不是依赖项。
+欢迎。LangGraph 多智能体网页采集器是一个确定性优先的多 Agent 网页采集器：9 个专职 Agent 由 LangGraph 监督者编排，LLM 只是增强项——绝不是依赖项。
 
 > [English Docs](https://github.com/LingMi1/langgraph-multi-agent-crawler/tree/main/docs/en)
 
@@ -21,7 +21,7 @@
 
 ## 为什么做这个
 
-市面上多数"AI 爬虫"是薄封装——每页都调 LLM，又慢又贵，模型端点一抖整站就停。boyushixi 回答的是生产问题：
+市面上多数"AI 爬虫"是薄封装——每页都调 LLM，又慢又贵，模型端点一抖整站就停。这个项目回答的是生产问题：
 
 - 怎么让 500 页的采集只调 **3 次 LLM**？
 - 模型端点在**运行中途**挂了，怎么不丢采集？

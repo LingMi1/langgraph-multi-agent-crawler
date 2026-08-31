@@ -30,3 +30,10 @@ All notable changes to this project are documented here. The format is based on 
 - **Offline golden evaluation** (`tools/golden_check.py`) — P/R/F1 + section recall over 3 template sites; regression diff (`tools/compare_runs.py`) gates CI.
 - **Safety & compliance** — three-layer prompt-injection defense, robots.txt on by default, TLS verify on by default, self-imposed frequency limiting.
 - **Three shells, one core** — CLI (`main.py`), tkinter GUI (`site_crawler_gui.py`), FastAPI service (`api/server.py`) share one `run_langgraph_crawler` entry.
+
+### Measured milestones (development history)
+
+- A full crawl of `zztzmjg.com` went from stalled overnight at 86 pages to **85 seconds / 3 LLM calls** after the circuit breaker + batched rescue were introduced.
+- The evaluation loop fired **12 config adjustments across 4 runs** — saved pages on `xnjzgc.cn` went 1→98, on `zztzmjg.com` 3→84.
+- Site-memory warm start reached a **100% hit rate** on second crawls of the same site.
+- The distributed scheduler batch-ran **3 real sites × 2 workers → all `done`, `attempts=1` each** (exactly-once measured).

@@ -1,8 +1,8 @@
-# 参与 boyushixi 开发
+# 参与 LangGraph 多智能体网页采集器开发
 
 > [English](CONTRIBUTING.md)
 
-感谢你有兴趣参与。boyushixi 是一个确定性优先的多 Agent 网页采集器：由 LangGraph 监督者编排 9 个专职 Agent，LLM 只是**增强项、绝不是依赖项**。下面的内容假设你已经把项目跑起来、并且想负责任地改动它。
+感谢你有兴趣参与。LangGraph 多智能体网页采集器是一个确定性优先的多 Agent 网页采集器：由 LangGraph 监督者编排 9 个专职 Agent，LLM 只是**增强项、绝不是依赖项**。下面的内容假设你已经把项目跑起来、并且想负责任地改动它。
 
 ## 环境准备
 
@@ -49,9 +49,9 @@ python distributed/scheduler.py run-workers --workers 2
 
 ```bash
 # 全量单元测试——必须保持全绿
-python -m pytest tests -q            # 271 passed
+python -m pytest tests -q            # 288 passed
 
-# 自建静态检查（62 个文件 / 0 问题）
+# 自建静态检查（64 个文件 / 0 问题）
 python tools/static_check.py
 
 # 离线 Golden 评估（P/R/F1 + 栏目发现率，机器可读）

@@ -74,8 +74,8 @@ docker run -p 8000:8000 -e CRAWLER_API_KEY=secret -v crawler_out:/app/output cra
 ## Verify the install
 
 ```bash
-python -m pytest tests -q            # 271 passed
-python tools/static_check.py         # 62 files / 0 issues
+python -m pytest tests -q            # 288 passed
+python tools/static_check.py         # 64 files / 0 issues
 python tools/golden_check.py --offline --json   # P/R/F1 report
 ```
 

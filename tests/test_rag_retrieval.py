@@ -93,6 +93,45 @@ class TestVectorIndex:
         assert res[0][0] == 3
 
 
+class TestRerank:
+    """两阶段重排序（PRF 查询扩展 + 得分融合）的形态与边界。"""
+
+    def test_rerank_shape_and_desc(self, idx):
+        res = idx.search_reranked("花生油 压榨 工艺 生产", top_k=4)
+        assert 0 < len(res) <= 4
+        scores = [s for _, s, _ in res]
+        assert scores == sorted(scores, reverse=True)
+        assert all(s > 0 for s in scores)
+
+    def test_rerank_top_stable(self, idx):
+        """融合后榜首应与初筛榜首一致（PRF 不劣化已知最佳结果）。"""
+        base = idx.search("花生油的压榨工艺", top_k=4)
+        reranked = idx.search_reranked("花生油的压榨工艺", top_k=4)
+        assert [d for d, _, _ in reranked] and reranked[0][0] == base[0][0]
+
+    def test_rerank_degrades_to_base_when_fb_zero(self, idx):
+        """fb_docs=0 时无扩展，融合分 == 初筛分，顺序与 search 一致。"""
+        base = idx.search("公司简介和主营业务", top_k=4)
+        deg = idx.search_reranked("公司简介和主营业务", top_k=4, fb_docs=0)
+        assert [d for d, _, _ in deg] == [d for d, _, _ in base]
+
+    def test_rerank_unrelated_query_empty(self, idx):
+        assert idx.search_reranked("钢铁冶炼高炉温度", top_k=4) == []
+
+    def test_rerank_snippet_trimmed(self, idx):
+        _, _, snip = idx.search_reranked("花生油", top_k=1)[0]
+        assert len(snip) <= 64
+
+    def test_rerank_tool_flag(self, idx):
+        """rerank=True 的 rag_search 工具可调且有序。"""
+        reg = ToolRegistry()
+        reg.register(build_rag_tool(idx, top_k=3, rerank=True))
+        res = reg.call("rag_search", query="花生油工艺", k=3)
+        scores = [s for _, s, _ in res]
+        assert 0 < len(res) <= 3
+        assert scores == sorted(scores, reverse=True)
+
+
 class TestRagTool:
     def test_build_rag_tool_shape(self, idx):
         tool = build_rag_tool(idx, top_k=2)

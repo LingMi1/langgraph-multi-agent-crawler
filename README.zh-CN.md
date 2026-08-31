@@ -1,14 +1,31 @@
-# boyushixi — 多 Agent 智能网页采集器
+# LangGraph 多智能体网页采集器
 
 [English](README.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](pyproject.toml)
-[![Tests](https://img.shields.io/badge/tests-271%20passed-brightgreen.svg)](tests)
+[![Tests](https://img.shields.io/badge/tests-288%20passed-brightgreen.svg)](tests)
 [![Docs: English](https://img.shields.io/badge/docs-English-blue.svg)](docs/en/README.md)
 [![Docs: 简体中文](https://img.shields.io/badge/docs-简体中文-red.svg)](docs/zh-CN/README.md)
 
 **一个基于 LangGraph Supervisor 多智能体架构的企业级网页采集系统。** 不是"每页都调 LLM"的爬虫——而是确定性优先的流水线：9 个专职 Agent（侦察 → 导航 → 抓取清洗 → 质量评估 → 媒体处理 → 落盘）自动化整站全流程，LLM 只是**增强项、绝不是依赖项**——每个节点失败都有一条不依赖模型的降级出路。
+
+<details>
+<summary><b>目录</b></summary>
+
+- [为什么做这个](#为什么做这个)
+- [界面截图](#界面截图)
+- [系统架构](#系统架构)
+- [核心特性](#核心特性)
+- [技术栈](#技术栈)
+- [快速开始](#快速开始)
+- [目录结构](#目录结构)
+- [测试](#测试)
+- [关键工程决策](#关键工程决策)
+- [工程踩坑实录](#工程踩坑实录)
+- [量化成果（实测数据）](#量化成果实测数据)
+
+</details>
 
 ## 为什么做这个
 
@@ -19,7 +36,19 @@
 - 怎么把"这次改动有没有变好"从感觉变成数字？
 - 确定性提取全失败时，系统怎么自主接管？
 
-这个项目就是我的答案：Supervisor 图 + 计划-执行-审查闭环，配套运行级熔断、批量后置抢救、预算触发的上下文压缩、离线 Golden 评估与 271 项单元测试。
+这个项目就是我的答案：Supervisor 图 + 计划-执行-审查闭环，配套运行级熔断、批量后置抢救、预算触发的上下文压缩、离线 Golden 评估与 288 项单元测试。
+
+## 界面截图
+
+对 [hnbn666.cn](http://www.hnbn666.cn/)（RuiQiCMS 可视化建站模板）的一次真实采集，通过 FastAPI 服务驱动：
+
+| 爬取控制台 — SSE 实时进度 + DAG 流程可视化 | 查看结果 — 按栏目层级的结果树 |
+|---|---|
+| ![爬取控制台](screenshots/crawl-console.png) | ![查看结果](screenshots/results-tree.png) |
+
+| 渲染预览 — 清洗后的页面 | 保存全部结果 .zip |
+|---|---|
+| ![渲染预览](screenshots/page-preview.png) | ![保存全部结果](screenshots/save-all-results.png) |
 
 ## 系统架构
 
@@ -73,7 +102,7 @@
 - **抓取合规与传输安全**（`agents/fetcher.py`）：robots.txt 检查默认开启（stdlib `robotparser`，零新依赖，按域缓存解析器，缺失/网络失败 → 放行，被禁 URL 标记 `blocked_by_robots`）；TLS 校验默认开启（`CRAWLER_TLS_VERIFY` 显式豁免）；频率自限（人类浏览节奏延迟 + 并发信号量）。
 - **跨 run 站点记忆**（`memory.py`）：`site_patterns` 在成功采集后写入站点类型 / JS 渲染 / 模板特征；同站点二次采集直接命中记忆、跳过重复侦察（冷启动变热启动，实测 100% 命中）。
 - **全轨迹可观测**：每个 Agent 的入参摘要 / 决策 / 出参 / 耗时落盘 JSONL（`output/<netloc>/traces/`），事件覆盖 start/end/error/decision/plan/review/memory_hit/store。
-- **轻量 RAG**（`agents/semdedup.py` + `agents/vector_retriever.py`）：字符级 n-gram Jaccard 近重复检测（无需分词器/向量库）+ 零依赖 TF-IDF 余弦检索器（对落盘 HTML 建索引），用 Recall@k / NDCG@k 量化。
+- **轻量 RAG**（`agents/semdedup.py` + `agents/vector_retriever.py`）：字符级 n-gram Jaccard 近重复检测（无需分词器/向量库）+ 零依赖 TF-IDF 余弦检索器（对落盘 HTML 建索引），带两阶段重排序（伪相关反馈查询扩展 + 得分融合），用 Recall@k / NDCG@k 量化。
 - **MCP 标准协议接入**（`tools/mcp_server.py` + `tools/mcp_client.py`）：行动/分析工具暴露为 MCP stdio 工具（协议 2025-11-25），与进程内 Function Calling 共用同一套执行器；fail-closed 错误通道。
 - **FastAPI 服务化**（`api/server.py`）：`POST /crawl`（202 / 409 单槽忙 / 429 限流）、`GET /tasks/{id}`、`GET /tasks/{id}/results`；X-API-Key 鉴权、每客户端提交限流、Dockerfile。**服务层零业务逻辑**——CLI、桌面 GUI、REST 共用同一 `run_langgraph_crawler` 入口（三壳体，一核心）。
 - **轻量分布式调度**（`distributed/`）：stdlib SQLite 任务队列 + multiprocessing worker，零新依赖——`BEGIN IMMEDIATE` 原子抢占、租约 + 心跳 + 崩溃回收、attempts 上限重试。分片维度是**站点**（每个 worker 跑一个站点的完整 workflow）。实测 3 站 × 2 worker → `{'done': 3}`、每任务 `attempts=1`（恰好一次）。
@@ -89,7 +118,7 @@
 | 解析清洗 | BeautifulSoup4 · trafilatura · 自研规则引擎 |
 | 数据 | Pydantic v2 · SQLite（去重 / HTML 缓存 / 站点记忆）· CSV / 文件 |
 | 服务化 | FastAPI · SSE · Docker |
-| 质量 | pytest（271）· JSONL 全轨迹 · Golden 评估 · LLM-as-judge · CI |
+| 质量 | pytest（288）· JSONL 全轨迹 · Golden 评估 · LLM-as-judge · CI |
 
 ## 快速开始
 
@@ -101,7 +130,7 @@ playwright install chromium          # 仅 JS 模板站渲染需要
 python -c "import asyncio; from graph.workflow import run_crawler; asyncio.run(run_crawler('https://example.com', max_steps=3000))"
 
 # 单元测试
-python -m pytest tests -q            # 271 passed
+python -m pytest tests -q            # 288 passed
 
 # MCP stdio 双向链路（握手→工具发现→call_tool→错误通道）
 python tools/mcp_client.py https://example.com/
@@ -117,13 +146,16 @@ python distributed/scheduler.py run-workers --workers 2
 python distributed/scheduler.py status
 
 # 离线静态检查（自研 stdlib 版，ruff 在 CI 交叉验证）
-python tools/static_check.py         # 62 文件 / 0 问题
+python tools/static_check.py         # 64 文件 / 0 问题
+
+# Markdown 相对链接检查（README / docs 截图与文档链接）
+python tools/check_links.py
 
 # Golden 离线评估（P/R/F1 + 栏目发现率，--json 机器可读）
 python tools/golden_check.py --offline --json
 
-# 校招证据报告（离线生成：golden 指标 + 实地站点统计 + 评估循环证据）
-python tools/gen_campus_report.py    # → reports/campus_report.{md,json}
+# 项目量化指标报告（离线生成：golden 指标 + 实地站点统计 + 评估循环证据）
+python tools/gen_metrics_report.py   # → reports/metrics_report.{md,json}
 
 # 回归对比（全指标 diff，REGRESSION 退出码 1）
 python tools/compare_runs.py baseline.json current.json
@@ -141,15 +173,16 @@ python tools/rag_demo.py hnbn666
 │                    #   + react（FC 闭环）+ semdedup 去重 + vector_retriever RAG + eval
 ├── graph/           # 编排级：workflow（Supervisor）/ agents（9 个）/ nodes / state
 │                    #   + react_takeover（深降级 ReAct 接管）
-├── tests/           # 271 项单元测试（safety / plan / BaseAgent / 工具 / 工具安全 /
+├── tests/           # 288 项单元测试（safety / plan / BaseAgent / 工具 / 工具安全 /
 │                    #   ReAct / 记账 / 去重 / RAG / 评估指标 / FC 评估链路 /
 │                    #   图装配冒烟 / golden 回归 / 接管 / 熔断+抢救 / MCP /
 │                    #   API / 分布式队列）
 ├── api/             # FastAPI 服务化（server.py：提交/进度/结果）
 ├── distributed/     # SQLite 任务队列 + 多进程调度
-├── tools/           # golden_check / compare_runs / static_check / rag_demo /
-│                    #   mcp_server + mcp_client / gen_campus_report
-├── reports/         # campus_report.{md,json} — 离线量化证据
+├── tools/           # golden_check / compare_runs / static_check / check_links /
+│                    #   rag_demo / analyze_trace / mcp_server + mcp_client /
+│                    #   gen_metrics_report
+├── reports/         # metrics_report.{md,json} — 离线量化证据
 ├── memory.py        # SQLite 长期记忆（visited_urls / site_patterns）
 ├── schemas.py       # Pydantic 模型 + 日志
 ├── .github/         # CI（多版本 Python：pytest + 静态检查 + golden 校验）
@@ -158,11 +191,12 @@ python tools/rag_demo.py hnbn666
 
 ## 测试
 
-**271 项单元测试全绿。** 每个子系统都有独立覆盖：安全（注入防护）、计划-执行、BaseAgent 模板、工具层 + 工具参数净化、ReAct 循环、token 记账、上下文压缩（8 个用例：触发边界 / system+最近帧保留 / 摘要兜底 / 循环收敛）、Jaccard 去重、RAG 检索指标、评估指标、FC 评估链路、图装配冒烟、golden 回归、深降级接管、熔断 + 批量抢救、MCP 工具层、API 服务层（含 SSE）、分布式队列 + 多进程消费。
+**288 项单元测试全绿。** 每个子系统都有独立覆盖：安全（注入防护）、计划-执行、BaseAgent 模板、工具层 + 工具参数净化、ReAct 循环、token 记账、上下文压缩（8 个用例：触发边界 / system+最近帧保留 / 摘要兜底 / 循环收敛）、Jaccard 去重、RAG 检索指标 + 两阶段重排序、轨迹分析（token/成本 + Agent 成功率）、评估指标、FC 评估链路、图装配冒烟、golden 回归、深降级接管、熔断 + 批量抢救、MCP 工具层、API 服务层（含 SSE）、分布式队列 + 多进程消费。
 
 ```
-python -m pytest tests -q            # 271 passed
-python tools/static_check.py         # 62 文件 / 0 问题（自研检查器，CI 中 ruff 交叉验证）
+python -m pytest tests -q            # 288 passed
+python tools/static_check.py         # 64 文件 / 0 问题（自研检查器，CI 中 ruff 交叉验证）
+python tools/check_links.py          # Markdown 相对链接（截图 / 文档）
 ```
 
 CI 流水线（`.github/workflows/ci.yml`）在每次推送运行 pytest + coverage、双层静态检查、golden 校验与（advisory）mypy。
@@ -210,11 +244,16 @@ FC 循环内的对话历史是工作记忆；正确的决策活在结构化 `Cra
 - **4KB 样本截断**：LLM 定位正文容器时压缩页面为 4KB 样本，控 token 且防提示注入面扩大。
 - **模块命名坑**：队列模块叫 `task_queue` 而非 `queue`——`queue.py` 会遮蔽标准库 `queue`（LangGraph 依赖 `queue.LifoQueue`）运行期直接崩，实测踩中已修复。
 
-## STAR 量化成果
+## 量化成果（实测数据）
 
-- **S**：中小型企业官网结构差异大（静态 / JS 模板 / 可视化建站），人工清洗效率低。
-- **T**：一套系统自适应任意网站并自动化全流程。
-- **A**：Supervisor 多智能体 + 计划执行审查闭环 + LLM 关键节点介入 + 规则引擎。
-- **R**：6 个真实站点累计 240 页落盘（xnjzgc.cn 98 页 / zztzmjg.com 84 页）；271 项单元测试全绿；评估循环实锤：4 次运行触发 12 次配置调整，xnjzgc.cn 保存量 1→98、zztzmjg.com 3→84；hnbn666.cn golden 离线 P/R/F1=1.0；熔断+抢救把 zztzmjg.com 从"86 页停滞整夜"变成"85 秒全站跑完、LLM 调用 3 次"；站点学习模式二次爬取 100% 命中；3 站 × 2 worker 分布式调度实跑全 done、恰好一次无双执行；`reports/campus_report.md` 全部指标离线可复现。
+**当前指标（离线可复现，见 `reports/metrics_report.md`）**
+- 8 个真实站点累计落盘 236 个 HTML 页面（clypg.cn 66 / dfgycrisp.com 72 / jstcba.cn 24 / zsyllh.cn 23 / cqht.cn 19 / sanzhigua.com 11 / huinenggroup.com 11 / hnbn666.cn 10）。
+- Golden 离线评估：hnbn666（RuiQiCMS 可视化建站模板）判定 **PASS**，P/R/F1 = 0.60 / 1.00 / 0.75。
+- 288 项单元测试全绿。
 
-*所有数字可用 `python tools/gen_campus_report.py` 离线复现。*
+**开发过程里程碑（详见 CHANGELOG）**
+- 熔断+抢救把 zztzmjg.com 从"86 页停滞整夜"变成"85 秒全站跑完、LLM 调用 3 次"。
+- 评估循环实锤：4 次运行触发 12 次配置调整，xnjzgc.cn 保存量 1→98、zztzmjg.com 3→84。
+- 站点学习模式二次爬取 100% 命中；3 站 × 2 worker 分布式调度实跑全 done、恰好一次无双执行。
+
+*当前可复现指标用 `python tools/gen_metrics_report.py` 离线重新生成；历史里程碑记录在 CHANGELOG。*

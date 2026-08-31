@@ -1,0 +1,199 @@
+{
+  "generated_at": "2026-08-31 11:31:08",
+  "offline": true,
+  "golden": {
+    "total_sites": 3,
+    "with_disk_evidence": 1,
+    "results": [
+      {
+        "name": "hnbn666",
+        "ok": true,
+        "success": true,
+        "saved": 10,
+        "min_saved": 6,
+        "keyword_hit": true,
+        "metrics": {
+          "precision": 0.6,
+          "recall": 1.0,
+          "f1": 0.75,
+          "coverage": 1.0,
+          "section_recall": null
+        },
+        "reasons": [],
+        "budget": {},
+        "budget_ok": true,
+        "elapsed_s": 0.0,
+        "offline": true
+      }
+    ]
+  },
+  "field_sites": {
+    "count": 8,
+    "total_saved_html": 236,
+    "sites": [
+      {
+        "domain": "www.clypg.com.cn",
+        "saved_html": 66,
+        "sections": [
+          "ESG实践",
+          "主营业务",
+          "主要制度",
+          "人力资源",
+          "储能",
+          "公司报告",
+          "公司治理",
+          "公司领导",
+          "公告与通函",
+          "公示公告",
+          "关于我们",
+          "发展历程",
+          "可持续发展",
+          "可持续发展报告",
+          "图片新闻",
+          "地热发电",
+          "太阳能发电",
+          "媒体报道",
+          "所获荣誉",
+          "技术服务",
+          "投资者关系",
+          "教育培训",
+          "新闻资讯",
+          "潮汐发电",
+          "社会责任",
+          "组织架构",
+          "董事会",
+          "风力发电",
+          "首页",
+          "龙源电力"
+        ],
+        "traces": 0
+      },
+      {
+        "domain": "www.cqht.cn",
+        "saved_html": 19,
+        "sections": [
+          "主营业务",
+          "人事信息",
+          "信息公开",
+          "党群工作",
+          "加入我们",
+          "新闻资讯",
+          "走进环投"
+        ],
+        "traces": 0
+      },
+      {
+        "domain": "www.dfgycrisp.com",
+        "saved_html": 72,
+        "sections": [
+          "产品介绍",
+          "产品百科",
+          "人才招聘",
+          "企业历程",
+          "企业荣誉",
+          "关于我们",
+          "冻干榴莲",
+          "冻干芒果",
+          "冻干黄桃",
+          "加盟合作",
+          "新闻中心"
+        ],
+        "traces": 0
+      },
+      {
+        "domain": "www.hnbn666.cn",
+        "saved_html": 10,
+        "sections": [
+          "产品展示",
+          "公司简介",
+          "客户案例",
+          "资讯中心",
+          "领导视察"
+        ],
+        "traces": 0
+      },
+      {
+        "domain": "www.huinenggroup.com",
+        "saved_html": 11,
+        "sections": [
+          "人才培养",
+          "人才招聘",
+          "化工产业",
+          "地产行业",
+          "新能源",
+          "汇能资讯",
+          "煤炭产业",
+          "电力产业",
+          "集团新闻",
+          "集团概况"
+        ],
+        "traces": 0
+      },
+      {
+        "domain": "www.jstcba.cn",
+        "saved_html": 24,
+        "sections": [
+          "企业单位保安业务",
+          "保安日常培训",
+          "保安日常执勤",
+          "保安服务",
+          "保安消防演习",
+          "公司新闻",
+          "公司资质",
+          "关于我们",
+          "其他业务",
+          "加入我们",
+          "商场保安业务",
+          "团队风采",
+          "大型明星活动",
+          "安全信用证书",
+          "小区活动保安业务",
+          "护学岗维护",
+          "政府单位保安业务",
+          "新闻中心",
+          "服务承诺",
+          "灯光节活动",
+          "物业保安业务",
+          "疫情防控高速口执勤",
+          "管理业绩",
+          "行业新闻"
+        ],
+        "traces": 0
+      },
+      {
+        "domain": "www.sanzhigua.com",
+        "saved_html": 11,
+        "sections": [
+          "Home » 发展历程",
+          "产品展示",
+          "企业文化",
+          "公司简介",
+          "种植基地",
+          "荣誉资质",
+          "资讯中心"
+        ],
+        "traces": 0
+      },
+      {
+        "domain": "www.zsyllh.cn",
+        "saved_html": 23,
+        "sections": [
+          "关于我们",
+          "工程案例",
+          "知识文库",
+          "绿化景观工程",
+          "行业动态"
+        ],
+        "traces": 0
+      }
+    ]
+  },
+  "traces": {
+    "count": 0,
+    "evaluation_loops": {
+      "total_adjust_events": 0,
+      "runs_with_loops": 0,
+      "loops": []
+    }
+  }
+}

@@ -1,6 +1,6 @@
-# boyushixi Documentation (English)
+# LangGraph Multi-Agent Crawler Documentation (English)
 
-Welcome to the project documentation. boyushixi is a deterministic-first multi-agent web harvester: 9 specialist agents orchestrated by a LangGraph supervisor, where the LLM is an enhancer — never a dependency.
+Welcome to the project documentation. LangGraph Multi-Agent Crawler is a deterministic-first multi-agent web harvester: 9 specialist agents orchestrated by a LangGraph supervisor, where the LLM is an enhancer — never a dependency.
 
 > [简体中文文档](https://github.com/LingMi1/langgraph-multi-agent-crawler/tree/main/docs/zh-CN)
 
@@ -21,7 +21,7 @@ Welcome to the project documentation. boyushixi is a deterministic-first multi-a
 
 ## Why this project exists
 
-Most "AI crawlers" are thin wrappers that call an LLM on every page — slow, expensive, and they stall the moment the model endpoint hiccups. boyushixi answers the production questions instead:
+Most "AI crawlers" are thin wrappers that call an LLM on every page — slow, expensive, and they stall the moment the model endpoint hiccups. This project answers the production questions instead:
 
 - How do you keep a 500-page crawl down to **3 LLM calls**?
 - How do you survive an LLM endpoint outage *mid-run* without losing the crawl?

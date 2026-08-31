@@ -15,6 +15,11 @@ warn_unused_ignores = false
 # mypy 作用域与 ANNO 门禁保持一致（核心模块先类型化）：
 #   mypy distributed api agents/budget.py agents/safety.py agents/interfaces.py agents/tools.py agents/react.py tools/golden_check.py
 
+# ruff 与自研 static_check 保持同规则子集（CI / pre-commit 交叉验证）：
+[tool.ruff]
+line-length = 100
+select = ["F401", "F403", "F811", "F821"]
+
 [tool.coverage.report]
 # 覆盖率门槛：核心包 >= 60%（起步低值，随测试补充渐进加码）
 fail_under = 60

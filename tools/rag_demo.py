@@ -83,6 +83,12 @@ def main() -> int:
         print(f"查询: {q!r}")
         for i, score, snippet in reg.call("rag_search", query=q, k=args.top_k):
             print(f"  [{score:.3f}] {snippet[:70]}")
+        # 两阶段重排序对比（PRF 查询扩展 + 得分融合）
+        reranked = index.search_reranked(q, top_k=args.top_k)
+        if reranked and [d for d, _, _ in reranked] != [d for d, _, _ in reg.call("rag_search", query=q, k=args.top_k)]:
+            print(f"  -- 重排序后（PRF 扩展 + 融合）--")
+            for i, score, snippet in reranked:
+                print(f"  [{score:.3f}] {snippet[:70]}")
     return 0
 
 

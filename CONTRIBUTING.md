@@ -1,8 +1,8 @@
-# Contributing to boyushixi
+# Contributing to LangGraph Multi-Agent Crawler
 
 > [简体中文](CONTRIBUTING.zh-CN.md)
 
-Thanks for the interest in contributing. boyushixi is a deterministic-first, multi-agent web harvester: 9 specialist agents orchestrated by a LangGraph supervisor, where the LLM is an *enhancer, never a dependency*. Everything below assumes you have the project running and want to change it responsibly.
+Thanks for the interest in contributing. LangGraph Multi-Agent Crawler is a deterministic-first, multi-agent web harvester: 9 specialist agents orchestrated by a LangGraph supervisor, where the LLM is an *enhancer, never a dependency*. Everything below assumes you have the project running and want to change it responsibly.
 
 ## Prerequisites
 
@@ -49,9 +49,9 @@ python distributed/scheduler.py run-workers --workers 2
 
 ```bash
 # Full unit suite — must stay green
-python -m pytest tests -q            # 271 passed
+python -m pytest tests -q            # 288 passed
 
-# Self-built static checker (62 files / 0 issues)
+# Self-built static checker (64 files / 0 issues)
 python tools/static_check.py
 
 # Offline golden evaluation (P/R/F1 + section recall, machine-readable)

@@ -1,6 +1,6 @@
 # Security Policy
 
-boyushixi is a research/interview project — a multi-agent web harvester. It is not a hardened product, but it follows **security by default, explicit exceptions** for the parts that face untrusted input and the network.
+LangGraph Multi-Agent Crawler is a research project — a multi-agent web harvester. It is not a hardened product, but it follows **security by default, explicit exceptions** for the parts that face untrusted input and the network.
 
 [简体中文版](SECURITY.zh-CN.md)
 
@@ -37,7 +37,7 @@ Any detected injection attempt is logged (see `log_injection_warning`).
 
 ## Reporting a vulnerability
 
-This is an interview demo, not a production service. If you still find something exploitable:
+This is a research project, not a production service. If you still find something exploitable:
 
 - **Do not** open a public issue with exploit details.
 - Send a short report to the repository owner (issues tab → private note) with: affected endpoint/module, a minimal repro, and impact.

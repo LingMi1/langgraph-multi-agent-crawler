@@ -1,14 +1,29 @@
-# boyushixi — Multi-Agent Web Harvester
+# LangGraph Multi-Agent Crawler
 
 [简体中文](README.zh-CN.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](pyproject.toml)
-[![Tests](https://img.shields.io/badge/tests-271%20passed-brightgreen.svg)](tests)
+[![Tests](https://img.shields.io/badge/tests-288%20passed-brightgreen.svg)](tests)
 [![Docs: English](https://img.shields.io/badge/docs-English-blue.svg)](docs/en/README.md)
 [![Docs: 简体中文](https://img.shields.io/badge/docs-简体中文-red.svg)](docs/zh-CN/README.md)
 
 **A multi-agent web harvesting system built from the ground up on LangGraph's Supervisor pattern.** Not a crawler that hands every page to an LLM — a deterministic-first pipeline where 9 specialist agents (scout → navigate → fetch/extract → evaluate → media → store) automate the full lifecycle of a site, and the LLM is an *enhancer, never a dependency*: every node has a fallback that runs without the model.
+
+<details>
+<summary><b>Table of Contents</b></summary>
+
+- [Why this exists](#why-this-exists)
+- [Screenshots](#screenshots)
+- [Architecture](#architecture)
+- [Features](#features)
+- [Tech Stack](#tech-stack)
+- [Quick Start](#quick-start)
+- [Project Structure](#project-structure)
+- [Testing](#testing)
+- [Key Design Decisions](#key-design-decisions)
+
+</details>
 
 ## Why this exists
 
@@ -19,7 +34,19 @@ Most "AI crawlers" are thin wrappers that call an LLM on every page — slow, ex
 - How do you measure "did this change help" instead of guessing?
 - How do you take over autonomously when deterministic extraction fails?
 
-This project is my answer: a supervisor graph with plan-and-execute and a review loop, backed by a run-level circuit breaker, batched post-hoc rescue, budget-triggered working-memory compaction, an offline golden-set evaluation, and 271 unit tests.
+This project is my answer: a supervisor graph with plan-and-execute and a review loop, backed by a run-level circuit breaker, batched post-hoc rescue, budget-triggered working-memory compaction, an offline golden-set evaluation, and 288 unit tests.
+
+## Screenshots
+
+A real crawl of [hnbn666.cn](http://www.hnbn666.cn/) (RuiQiCMS visual-builder template) through the FastAPI service:
+
+| Crawl console — SSE live progress + DAG visualization | Result tree — section hierarchy |
+|---|---|
+| ![crawl console](screenshots/crawl-console.png) | ![result tree](screenshots/results-tree.png) |
+
+| Cleaned page preview | Save all results as `.zip` |
+|---|---|
+| ![page preview](screenshots/page-preview.png) | ![save all results](screenshots/save-all-results.png) |
 
 ## Architecture
 
@@ -73,7 +100,7 @@ This project is my answer: a supervisor graph with plan-and-execute and a review
 - **Compliance & transport safety** (`agents/fetcher.py`) — robots.txt check on by default (stdlib `robotparser`, zero new dependencies, per-domain parser cache, missing/network-failure → allow, blocked URLs marked `blocked_by_robots`); TLS verification on by default (`CRAWLER_TLS_VERIFY` for explicit exemption); self-imposed frequency limiting (human-pace delay + concurrency semaphore).
 - **Cross-run site memory** (`memory.py`) — `site_patterns` writes site type / JS-render / template hints after a successful crawl; a second crawl of the same site hits the memory and skips re-reconnaissance (cold → warm start, 100% hit rate measured).
 - **Full trace observability** — every agent's input digest / decision / output / duration lands in JSONL (`output/<netloc>/traces/`), events cover start/end/error/decision/plan/review/memory_hit/store.
-- **Lightweight RAG** (`agents/semdedup.py` + `agents/vector_retriever.py`) — character-level n-gram Jaccard near-duplicate detection (no tokenizer/vector DB), plus a zero-dependency TF-IDF cosine retriever over harvested pages, scored with Recall@k / NDCG@k.
+- **Lightweight RAG** (`agents/semdedup.py` + `agents/vector_retriever.py`) — character-level n-gram Jaccard near-duplicate detection (no tokenizer/vector DB), plus a zero-dependency TF-IDF cosine retriever over harvested pages with two-stage reranking (pseudo-relevance-feedback query expansion + score fusion), scored with Recall@k / NDCG@k.
 - **MCP integration** (`tools/mcp_server.py` + `tools/mcp_client.py`) — action/analysis tools exposed as MCP stdio tools (protocol 2025-11-25), single-source executors shared with the in-process function-calling path; fail-closed error channel.
 - **FastAPI service** (`api/server.py`) — `POST /crawl` (202 / 409 single-slot busy / 429 throttled), `GET /tasks/{id}`, `GET /tasks/{id}/results`; X-API-Key auth, per-client submit throttling, Dockerfile. The service layer holds **zero business logic** — CLI, desktop GUI, and REST share one `run_langgraph_crawler` entry (three shells, one core).
 - **Lightweight distributed scheduler** (`distributed/`) — stdlib SQLite task queue + multiprocessing workers, zero new dependencies: `BEGIN IMMEDIATE` atomic claim, lease + heartbeat + crash recovery, attempts-bounded retry. Shard dimension is the *site* (each worker runs one site's full workflow). Batch-ran 3 real sites with 2 workers to `{'done': 3}`, `attempts=1` each — exactly-once.
@@ -89,7 +116,7 @@ This project is my answer: a supervisor graph with plan-and-execute and a review
 | Parse & clean | BeautifulSoup4 · trafilatura · custom rule engine |
 | Data | Pydantic v2 · SQLite (dedup / HTML cache / site memory) · CSV / files |
 | Service | FastAPI · SSE · Docker |
-| Quality | pytest (271) · JSONL traces · golden-set eval · LLM-as-judge · CI |
+| Quality | pytest (288) · JSONL traces · golden-set eval · LLM-as-judge · CI |
 
 ## Quick Start
 
@@ -101,7 +128,7 @@ playwright install chromium          # only for JS-rendered template sites
 python -c "import asyncio; from graph.workflow import run_crawler; asyncio.run(run_crawler('https://example.com', max_steps=3000))"
 
 # Unit tests
-python -m pytest tests -q            # 271 passed
+python -m pytest tests -q            # 288 passed
 
 # MCP stdio round-trip (handshake → tool discovery → call_tool → error channel)
 python tools/mcp_client.py https://example.com/
@@ -117,13 +144,13 @@ python distributed/scheduler.py run-workers --workers 2
 python distributed/scheduler.py status
 
 # Offline static check (self-built stdlib checker; ruff cross-verifies in CI)
-python tools/static_check.py         # 62 files / 0 issues
+python tools/static_check.py         # 64 files / 0 issues
 
 # Golden offline eval (P/R/F1 + section recall, --json machine-readable)
 python tools/golden_check.py --offline --json
 
-# Campus evidence report (offline: golden metrics + real-site stats + eval-loop traces)
-python tools/gen_campus_report.py    # → reports/campus_report.{md,json}
+# Project metrics report (offline: golden metrics + real-site stats + eval-loop traces)
+python tools/gen_metrics_report.py   # → reports/metrics_report.{md,json}
 
 # Regression diff (full-metric, REGRESSION → exit 1)
 python tools/compare_runs.py baseline.json current.json
@@ -141,15 +168,16 @@ Desktop GUI (tkinter): `python site_crawler_gui.py` (batch URL import from TXT +
 │                    #   + react (FC loop) + semdedup + vector_retriever + eval
 ├── graph/           # orchestration: workflow (Supervisor) / agents (9) / nodes / state
 │                    #   + react_takeover (deep-degradation ReAct takeover)
-├── tests/           # 271 unit tests (safety / plan / tools / ReAct / budgeting /
+├── tests/           # 288 unit tests (safety / plan / tools / ReAct / budgeting /
 │                    #   dedup / RAG / eval metrics / FC eval path / graph smoke /
 │                    #   golden loop / regression / takeover / breaker+rescue /
 │                    #   MCP / API / distributed queue)
 ├── api/             # FastAPI service (server.py: submit/progress/results)
 ├── distributed/     # SQLite task queue + multiprocessing scheduler
-├── tools/           # golden_check / compare_runs / static_check / rag_demo /
-│                    #   mcp_server + mcp_client / gen_campus_report
-├── reports/         # campus_report.{md,json} — offline quantified evidence
+├── tools/           # golden_check / compare_runs / static_check / check_links /
+│                    #   rag_demo / analyze_trace / mcp_server + mcp_client /
+│                    #   gen_metrics_report
+├── reports/         # metrics_report.{md,json} — offline quantified evidence
 ├── memory.py        # SQLite long-term memory (visited_urls / site_patterns)
 ├── schemas.py       # Pydantic models + logging
 ├── .github/         # CI (multi-version Python: pytest + static check + golden)
@@ -158,11 +186,12 @@ Desktop GUI (tkinter): `python site_crawler_gui.py` (batch URL import from TXT +
 
 ## Testing
 
-**271 unit tests, all green.** Every subsystem has dedicated coverage: safety (injection defense), plan-and-execute, BaseAgent template, tool layer + tool-arg sanitization, ReAct loop, token budgeting, compaction (8 cases: trigger boundary / system+recent-frame retention / summary fallback / loop convergence), Jaccard dedup, RAG retrieval metrics, eval metrics, FC evaluation path, graph assembly smoke, golden regression loop, deep-degradation takeover, circuit breaker + batched rescue, MCP tool layer, API service layer (incl. SSE), and the distributed queue with multiprocessing consumption.
+**288 unit tests, all green.** Every subsystem has dedicated coverage: safety (injection defense), plan-and-execute, BaseAgent template, tool layer + tool-arg sanitization, ReAct loop, token budgeting, compaction (8 cases: trigger boundary / system+recent-frame retention / summary fallback / loop convergence), Jaccard dedup, RAG retrieval metrics + two-stage reranking, trace-analysis (token/cost + agent success rate), eval metrics, FC evaluation path, graph assembly smoke, golden regression loop, deep-degradation takeover, circuit breaker + batched rescue, MCP tool layer, API service layer (incl. SSE), and the distributed queue with multiprocessing consumption.
 
 ```
-python -m pytest tests -q            # 271 passed
-python tools/static_check.py         # 62 files / 0 issues (self-built checker, ruff-verified in CI)
+python -m pytest tests -q            # 288 passed
+python tools/static_check.py         # 64 files / 0 issues (self-built checker, ruff-verified in CI)
+python tools/check_links.py          # markdown relative links (screenshots / docs)
 ```
 
 The CI pipeline (`.github/workflows/ci.yml`) runs pytest + coverage, the double static check, golden verification, and (advisory) mypy on every push.
@@ -203,4 +232,4 @@ Claiming is atomic (`BEGIN IMMEDIATE`), so N workers never double-grab a task; l
 
 ---
 
-*STAR summary and interview-oriented numbers: 6 real sites / 240 pages harvested; 85-second full crawl of a real site with 3 LLM calls (was: stalled overnight at 86 pages); evaluation loops fired 12 config adjustments across 4 runs (saved 1→98 on one site); golden P/R/F1 = 1.0 offline; 271 tests; all numbers reproducible via `python tools/gen_campus_report.py`.*
+*Measured results (offline-reproducible via `python tools/gen_metrics_report.py`): 8 real sites / 236 pages harvested; golden offline eval on hnbn666 (RuiQiCMS visual-builder template) = PASS with P/R/F1 0.60/1.00/0.75; 288 tests all green. Development milestones (CHANGELOG): a full crawl of zztzmjg.com went from stalled overnight at 86 pages to 85 seconds with 3 LLM calls via the circuit breaker + batched rescue; evaluation loops fired 12 config adjustments across 4 runs (saved 1→98 on xnjzgc.cn); the site-memory warm start hit 100%; the distributed scheduler ran 3 sites × 2 workers exactly-once.*

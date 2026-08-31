@@ -1,6 +1,6 @@
 # Architecture
 
-boyushixi is a **deterministic-first** pipeline: every node's default action runs without a model, and the LLM enters only at judgment points, under a semaphore. Each LLM failure degrades back to the deterministic path. The crawl is the product; the LLM is an enhancer.
+LangGraph Multi-Agent Crawler is a **deterministic-first** pipeline: every node's default action runs without a model, and the LLM enters only at judgment points, under a semaphore. Each LLM failure degrades back to the deterministic path. The crawl is the product; the LLM is an enhancer.
 
 ## Supervisor graph
 

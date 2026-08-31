@@ -1,15 +1,15 @@
-"""tools/gen_campus_report.py — 校招证据报告生成器（离线，不联网）
+"""tools/gen_metrics_report.py — 项目量化指标报告生成器（离线，不联网）
 
-从已落盘的运行证据（output/）生成可摆上桌的量化报告，回答面试官三个问题：
-  1. "你的 golden 指标是多少分？"      → 对 golden 清单中已有落盘的站点跑 P/R/F1
-  2. "你真的跑过吗？跑了几站？"        → 实地站点统计（保存量/栏目数/轨迹数）
-  3. "LLM 评估循环真的工作吗？"        → 从 trace 提取"调整前 vs 调整后"决策链
+从已落盘的运行证据（output/）生成离线量化报告，回答三个问题：
+  1. "golden 指标是多少分？"      → 对 golden 清单中已有落盘的站点跑 P/R/F1
+  2. "真实跑过哪些站点？"        → 实地站点统计（保存量/栏目数/轨迹数）
+  3. "LLM 评估循环真的工作吗？"  → 从 trace 提取"调整前 vs 调整后"决策链
 
 用法:
-  python tools/gen_campus_report.py
+  python tools/gen_metrics_report.py
 输出:
-  reports/campus_report.json   结构化数据（可再喂给 compare_runs）
-  reports/campus_report.md     人读摘要（面试/README 引用）
+  reports/metrics_report.json   结构化数据（可再喂给 compare_runs）
+  reports/metrics_report.md     人读摘要（README 引用）
 """
 
 import glob
@@ -194,7 +194,7 @@ def _build_report() -> dict:
 
 def _md(report: dict) -> str:
     L = []
-    L.append("# 校招证据报告（离线生成）\n")
+    L.append("# 量化指标报告（离线生成）\n")
     L.append(f"- 生成时间: {report['generated_at']}")
     L.append(f"- 全部指标由本地已落盘产物离线计算，**不联网、不调用 LLM**，可复现。\n")
 
@@ -245,7 +245,7 @@ def _md(report: dict) -> str:
     L.append("```bash")
     L.append("python tools/golden_check.py hnbn666 --offline   # 单站 golden 离线复核")
     L.append("python tools/golden_check.py --list               # 查看 golden 清单")
-    L.append("python tools/gen_campus_report.py                 # 重新生成本报告")
+    L.append("python tools/gen_metrics_report.py                 # 重新生成本报告")
     L.append("```")
     return "\n".join(L)
 
@@ -254,14 +254,14 @@ def main() -> int:
     os.makedirs(REPORT_DIR, exist_ok=True)
     report = _build_report()
 
-    with open(os.path.join(REPORT_DIR, "campus_report.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(REPORT_DIR, "metrics_report.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
-    with open(os.path.join(REPORT_DIR, "campus_report.md"), "w", encoding="utf-8") as f:
+    with open(os.path.join(REPORT_DIR, "metrics_report.md"), "w", encoding="utf-8") as f:
         f.write(_md(report))
 
-    print("[gen_campus_report] 已生成:")
-    print("  reports/campus_report.json")
-    print("  reports/campus_report.md")
+    print("[gen_metrics_report] 已生成:")
+    print("  reports/metrics_report.json")
+    print("  reports/metrics_report.md")
     print("  golden 有落盘站点: %d/%d | 实地站点: %d | 轨迹: %d"
           % (len(report["golden"]["results"]), report["golden"]["total_sites"],
              report["field_sites"]["count"], report["traces"]["count"]))

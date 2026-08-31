@@ -7,15 +7,15 @@
 │                    #   + react (FC loop) + semdedup + vector_retriever + eval
 ├── graph/           # orchestration: workflow (Supervisor) / agents (9) / nodes / state
 │                    #   + react_takeover (deep-degradation ReAct takeover)
-├── tests/           # 271 unit tests (safety / plan / tools / ReAct / budgeting /
+├── tests/           # 288 unit tests (safety / plan / tools / ReAct / budgeting /
 │                    #   dedup / RAG / eval metrics / FC eval path / graph smoke /
 │                    #   golden loop / regression / takeover / breaker+rescue /
 │                    #   MCP / API / distributed queue)
 ├── api/             # FastAPI service (server.py: submit/progress/results + SSE)
 ├── distributed/     # SQLite task queue + multiprocessing scheduler
 ├── tools/           # golden_check / compare_runs / static_check / rag_demo /
-│                    #   mcp_server + mcp_client / gen_campus_report
-├── reports/         # campus_report.{md,json} — offline quantified evidence
+│                    #   mcp_server + mcp_client / gen_metrics_report
+├── reports/         # metrics_report.{md,json} — offline quantified evidence
 ├── memory.py        # SQLite long-term memory (visited_urls / site_patterns)
 ├── schemas.py       # Pydantic models + logging
 ├── .github/         # CI (multi-version Python: pytest + static check + golden)
@@ -35,10 +35,10 @@ pip install -r requirements.txt
 python -c "import asyncio; from graph.workflow import run_crawler; asyncio.run(run_crawler('https://example.com', max_steps=3000))"
 
 # Unit tests — must stay green
-python -m pytest tests -q            # 271 passed
+python -m pytest tests -q            # 288 passed
 
 # Self-built static checker (ruff cross-verifies in CI)
-python tools/static_check.py         # 62 files / 0 issues
+python tools/static_check.py         # 64 files / 0 issues
 
 # Offline golden evaluation
 python tools/golden_check.py --offline --json

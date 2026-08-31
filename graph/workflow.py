@@ -159,7 +159,8 @@ def build_app(seed_url: str, concurrency: int = 3) -> "tuple[Any, AgentContext]"
     构建一次运行所需的 (编译图, AgentContext)。
 
     每次 run_crawler 独立构建（LangGraph 编译开销可忽略）：
-      - TraceRecorder 仅内存记账（persist=False），不落盘 traces/trace_*.jsonl
+      - TraceRecorder 落盘 traces/trace_*.jsonl（output/<netloc>/traces/），
+        供 tools/analyze_trace.py 复盘（决策链 / 耗时 / 错误 / 成本估算）
       - 8 个编排级 Agent 共享同一 AgentContext（trace / llm / memory）
     """
     from urllib.parse import urlparse
@@ -169,7 +170,7 @@ def build_app(seed_url: str, concurrency: int = 3) -> "tuple[Any, AgentContext]"
     trace = TraceRecorder(
         output_dir=os.path.join(output_dir, netloc),
         run_id=time.strftime("%Y%m%d_%H%M%S"),
-        persist=False,  # ★ 不落盘 JSONL（不创建 traces/ 目录、不写 trace_*.jsonl）
+        persist=True,  # 落盘 JSONL 轨迹（output/ 已 gitignore，不污染仓库）
     )
     ctx = AgentContext(trace=trace)
     agents = build_agents(ctx)

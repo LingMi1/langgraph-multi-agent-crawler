@@ -140,7 +140,7 @@ class CrawlerRunner(TaskRunner):
     def run(self, inputs, log_cb, progress_cb, pause_event, stop_event):
         urls = self._collect_urls(inputs)
         if not urls:
-            # 演示占位：真实跑过的站点（详见 reports/campus_report.md），避免 example.com 假数据
+            # 演示占位：真实跑过的站点（详见 reports/metrics_report.md），避免 example.com 假数据
             # ★ hnbn666 只支持 http（https 会被服务器直接断连），其余站点 https 可达
             urls = [
                 "http://www.hnbn666.cn/",

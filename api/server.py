@@ -788,7 +788,7 @@ async def orchestrator_cleaned(
     x_api_key: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
 ) -> Response:
-    """boyushixi 无独立清洗产物（CSV 的 html 即提取后源码）→ 与 result 同源。"""
+    """本项目无独立清洗产物（CSV 的 html 即提取后源码）→ 与 result 同源。"""
     return await orchestrator_result(result_dir, filename, x_api_key, authorization)
 
 
