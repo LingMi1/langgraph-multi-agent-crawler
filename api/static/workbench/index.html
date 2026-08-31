@@ -436,7 +436,7 @@ window.jsBeautify = jsBeautify;
         <input type="checkbox" id="chkLeafOnly" onchange="WizardState.leaf_only=this.checked;saveWizardState();" />
         仅叶子节点
       </label>
-      <button class="btn btn-primary" onclick="downloadAllZip()">下载全部 .zip</button>
+      <button class="btn btn-primary" onclick="saveAllResults()" title="选择本机目录，按 output/<域名>/栏目/标题.html 结构保存全部爬取结果（重复页已排除）；浏览器不支持时下载 zip">保存全部结果</button>
       <button class="btn btn-primary" onclick="exportCsv()">导出 content_001 CSV</button>
       <button class="btn btn-accent" onclick="importToDb(event)">一键导入数据库</button>
       <button class="btn btn-secondary" onclick="downloadSummary()">下载统计报告 .json</button>
@@ -850,7 +850,10 @@ function handleSseEvent(evt) {
       document.getElementById('pageCounter').textContent = total > 0 ? evt.page_count+'/'+total+' 页' : evt.page_count+' 页';
       let statusIconHtml = statusIcon(evt.success);
       let cls = evt.success ? 'success' : 'error';
-      addLog(statusIconHtml+' '+esc(evt.url)+' — '+(evt.status_code||'?')+' — '+esc((evt.title||'').slice(0,30)), cls);
+      // URL 可点击：跳到查看结果并预览该页（爬取中文件未落盘则提示）
+      let logIdx = pageResults.length - 1;
+      let urlLink = `<a href="javascript:void(0)" onclick="jumpToPage(${logIdx})" style="color:var(--primary);text-decoration:underline;word-break:break-all;">${esc(evt.url)}</a>`;
+      addLog(statusIconHtml+' '+urlLink+' — '+(evt.status_code||'?')+' — '+esc((evt.title||'').slice(0,30)), cls);
       break;
     case 'cleaning_progress':
       let cleanMax = cleanStats?.total || evt.total || 0;
@@ -1015,6 +1018,18 @@ function stopCrawl() {
   document.getElementById('statusLabel').textContent = '已停止';
 }
 
+// 日志里的页面 URL 点击 → 跳到查看结果预览该页
+function jumpToPage(idx) {
+  let p = pageResults[idx];
+  if (!p) return;
+  if (crawlRunning) { alert('爬取进行中，页面尚未落盘；完成后（或停止后）再点击查看'); return; }
+  if (!p.filename || !p.result_dir) { alert('该页面没有落盘文件，无法预览'); return; }
+  showStep(3);
+  loadResults();
+  // loadResults 默认选中第一页，稍等树渲染后切换为目标页
+  setTimeout(() => selectPage(p), 400);
+}
+
 // ==================== DAG RENDERING ====================
 // 9 个真实 Agent 节点：scout → navigate → fetch_extract → evaluate → config_adjust / code_gen / react → media_processor → storage
 const DAG_NODES = [
@@ -1161,10 +1176,15 @@ function countYwlx(node) {
 
 function ywlxLeafHtml(p, depth) {
   let idx = pageResults.indexOf(p);
+  // 重复内容页（爬虫按标题+正文去重，只存一份）：置灰标注，避免点开空白误以为坏了
+  let info = pageYwlx[p.url];
+  let isDup = info && info.dup === 'true';
+  let dim = isDup ? 'opacity:0.55;' : '';
+  let dupTag = isDup ? ' <span style="font-size:11px;color:var(--text-sec);">(重复)</span>' : '';
   return `<div class="tree-leaf${currentPreviewPage && currentPreviewPage.url === p.url ? ' active' : ''}"
                 onclick="selectPage(pageResults[${idx}])" data-idx="${idx}"
-                style="padding-left:${28 + depth * 16}px;">
-             ${statusIcon(p.success)} <span class="tree-label">${esc((p.title || p.url || '').slice(0, 45))}</span>
+                style="padding-left:${28 + depth * 16}px;${dim}">
+             ${isDup ? '⧉' : statusIcon(p.success)} <span class="tree-label">${esc((p.title || p.url || '').slice(0, 45))}</span>${dupTag}
            </div>`;
 }
 
@@ -1711,65 +1731,48 @@ function downloadCurrentPage() {
   saveAs(blob, sanitizeFilePart(currentPreviewPage?.title)+'.html');
 }
 
-async function downloadAllZip() {
-  let zip = new JSZip();
+// 保存全部爬取结果：优先选本机目录、按 output 结构写入；浏览器不支持时回退下载 zip
+async function saveAllResults() {
+  let dir = (crawlMetrics && crawlMetrics.result_dir) || (pageResults[0] && pageResults[0].result_dir) || '';
+  if (!dir) { alert('当前没有可保存的批次，请先完成一次爬取'); return; }
   let token = getToken();
-  let useCleaned = currentCleanMode === 'cleaned' && cleanedDir;
-  let cache = useCleaned ? currentPageMdCleaned : currentPageMd;
-  // Collect all pages that have result_dir/filename but may not be in cache
-  let urlsAdded = new Set();
-  for (let p of pageResults) {
-    if (p.filename) {
-      let md = cache[p.url];
-      if (!md) {
-        try {
-          let endpoint = useCleaned
-            ? `/orchestrator/cleaned/${cleanedDir}/${p.filename}`
-            : `/orchestrator/result/${p.result_dir}/${p.filename}`;
-          let headers = {};
-          if (token) headers['Authorization'] = 'Bearer ' + token;
-          let resp = await fetch(endpoint, {
-            headers: headers
-          });
-          if (resp.ok) md = await resp.text();
-          else if (useCleaned) {
-            // 清洗后文件缺失，回退原始
-            let rawHeaders = {};
-            if (token) rawHeaders['Authorization'] = 'Bearer ' + token;
-            let rawResp = await fetch(`/orchestrator/result/${encodeURIComponent(p.result_dir)}/${encodeURIComponent(p.filename)}`, {
-              headers: rawHeaders
-            });
-            if (rawResp.ok) md = await rawResp.text();
-          }
-        } catch(e) {}
+  let headers = {};
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  let blob;
+  try {
+    let resp = await fetch('/orchestrator/output_zip?result_dir=' + encodeURIComponent(dir) + '&leaf_only=' + (getLeafOnly() ? 'true' : 'false'), { headers });
+    if (!resp.ok) { alert('保存失败: ' + (await resp.text())); return; }
+    blob = await resp.blob();
+  } catch (e) { alert('保存失败: ' + e.message); return; }
+
+  // 首选：File System Access API 选目录直接写入（Chrome/Edge，localhost 可用）
+  if (window.showDirectoryPicker) {
+    try {
+      let root = await window.showDirectoryPicker({ mode: 'readwrite' });
+      let zip = await JSZip.loadAsync(blob);
+      let entries = Object.values(zip.files).filter(f => !f.dir);
+      let done = 0;
+      for (let entry of entries) {
+        let parts = entry.name.split('/').filter(Boolean);
+        let handle = root;
+        for (let i = 0; i < parts.length - 1; i++) {
+          handle = await handle.getDirectoryHandle(parts[i], { create: true });
+        }
+        let fh = await handle.getFileHandle(parts[parts.length - 1], { create: true });
+        let w = await fh.createWritable();
+        await w.write(await entry.async('blob'));
+        await w.close();
+        done++;
       }
-      let name = p.filename || (p.url||'page').replace(/[^a-zA-Z0-9一-鿿\-_\.]/g, '_')+'.html';
-      // 清洗后模式文件名加 _cleaned 后缀
-      if (useCleaned && !name.endsWith('_cleaned.html')) {
-        name = name.replace(/\.html$/, '_cleaned.html');
-      }
-      zip.file(name, md || `<!doctype html><html><head><meta charset="utf-8"><title>${p.title||'Untitled'}</title></head><body><h1>${p.title||'Untitled'}</h1><p>URL: ${p.url}</p></body></html>`);
-      urlsAdded.add(p.url);
+      alert(`已保存 ${done} 个文件到所选目录（栏目结构 + crawl_results.csv，重复页已排除）`);
+      return;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return; // 用户取消选目录
+      // 目录写入失败 → 落到下方 zip 下载回退
     }
   }
-  // Add any locally cached pages not yet covered
-  for (let [path, md] of Object.entries(cache)) {
-    if (!urlsAdded.has(path)) {
-      let name = path.replace(/[^a-zA-Z0-9一-鿿\-_\.]/g, '_')+'.html';
-      zip.file(name, md);
-    }
-  }
-  // Fallback: if still no files, create placeholders
-  if (Object.keys(cache).length === 0 && pageResults.length > 0) {
-    pageResults.forEach(p => {
-      if (!urlsAdded.has(p.url)) {
-        let name = (p.url||'page').replace(/[^a-zA-Z0-9一-鿿\-_\.]/g, '_')+'.html';
-        zip.file(name, `<!doctype html><html><head><meta charset="utf-8"><title>${p.title||'Untitled'}</title></head><body><h1>${p.title||'Untitled'}</h1><p>URL: ${p.url}</p></body></html>`);
-      }
-    });
-  }
-  let blob = await zip.generateAsync({type:'blob'});
-  saveAs(blob, useCleaned ? 'crawl_results_cleaned.zip' : 'crawl_results.zip');
+  // 回退：不支持目录选择（Firefox/Safari）或写入失败 → 下载 zip
+  saveAs(blob, dir.replace(/[^a-zA-Z0-9._-]/g, '_') + '_results.zip');
 }
 
 function downloadSummary() {
@@ -2024,7 +2027,9 @@ async function viewHistory(id) {
   cleanStats = h.clean_stats || {};
   currentCleanMode = 'raw';
   saveWizardState();
-  toggleHistory();
+  // 显式关闭历史抽屉（toggle 是翻转语义，抽屉未开时会误打开）
+  document.getElementById('historyDrawer').classList.remove('open');
+  document.getElementById('drawerOverlay').classList.remove('open');
   showStep(3);
   loadResults();
 }
