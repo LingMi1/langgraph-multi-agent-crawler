@@ -2,6 +2,7 @@
 
 [简体中文](README.zh-CN.md)
 
+[![CI](https://github.com/LingMi1/langgraph-multi-agent-crawler/actions/workflows/ci.yml/badge.svg)](https://github.com/LingMi1/langgraph-multi-agent-crawler/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](pyproject.toml)
 [![Tests](https://img.shields.io/badge/tests-288%20passed-brightgreen.svg)](tests)
@@ -50,18 +51,26 @@ A real crawl of [hnbn666.cn](http://www.hnbn666.cn/) (RuiQiCMS visual-builder te
 
 ## Architecture
 
-```
-                        ┌──────────────────────────────┐
-                        │  Supervisor (graph/workflow) │  orchestration + conditional routing
-                        └──────────────┬───────────────┘
-                                       │
-     START → Scout ─→ Navigate ─→ FetchExtract ─→ Evaluate ─→ Media ─→ Storage → END
-               │           │            │  ▲          │  ▲
-               │           │            │  │(BFS loop)│  │(review verdict)
-               │           │            └──┘          │  │
-               │           └──────────► ConfigAdjust ◄─┘  │
-               └──────────► (memory hit)                  │
-                                  CodeGen (LLM last resort)┘
+```mermaid
+graph LR
+    S([START]) --> Scout[ScoutAgent]
+    Scout --> Nav[NavigateAgent]
+    Nav --> FE[FetchExtractAgent]
+    FE --> RF{queue empty?}
+    RF -- "no · BFS loop" --> FE
+    RF -- "yes" --> Ev[EvaluateAgent]
+    Ev --> RE{passed?}
+    RE -- "yes / give up" --> Media[MediaProcessorAgent]
+    RE -- "adjust < 3" --> CA[ConfigAdjustAgent]
+    RE -- "adjust ≥ 3 · no rules yet" --> CG[CodeGenAgent]
+    RE -- "rules exist · deep failure" --> RT[ReactTakeoverAgent]
+    RE -- "error" --> St[StorageAgent]
+    CA --> Nav
+    CG --> Nav
+    RT -- "retry" --> Nav
+    RT -- "give up" --> Media
+    Media --> St
+    St --> E([END])
 ```
 
 **9 orchestrated agents** (`graph/agents.py`, unified `BaseAgent` template method — trace recording, exception isolation, timing):

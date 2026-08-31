@@ -7,9 +7,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# 先装依赖（利用层缓存）
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# 先装依赖（利用层缓存；requirements.lock 精确锁定版本保证可复现）
+COPY requirements.txt requirements.lock ./
+RUN pip install --no-cache-dir -r requirements.lock
 
 # 再拷代码
 COPY . .

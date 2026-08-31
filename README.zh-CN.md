@@ -2,6 +2,7 @@
 
 [English](README.md)
 
+[![CI](https://github.com/LingMi1/langgraph-multi-agent-crawler/actions/workflows/ci.yml/badge.svg)](https://github.com/LingMi1/langgraph-multi-agent-crawler/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](pyproject.toml)
 [![Tests](https://img.shields.io/badge/tests-288%20passed-brightgreen.svg)](tests)
@@ -52,18 +53,26 @@
 
 ## 系统架构
 
-```
-                        ┌──────────────────────────────┐
-                        │  Supervisor (graph/workflow) │  监督者：编排 + 条件路由
-                        └──────────────┬───────────────┘
-                                       │
-     START → Scout ─→ Navigate ─→ FetchExtract ─→ Evaluate ─→ Media ─→ Storage → END
-               │           │            │  ▲          │  ▲
-               │           │            │  │(BFS循环)  │  │(审查裁决)
-               │           │            └──┘          │  │
-               │           └──────────► ConfigAdjust ◄─┘  │
-               └──────────► (记忆命中)                     │
-                                  CodeGen (LLM 最后保底) ──┘
+```mermaid
+graph LR
+    S([开始]) --> Scout[ScoutAgent 侦察兵]
+    Scout --> Nav[NavigateAgent 领航员]
+    Nav --> FE[FetchExtractAgent 执行者]
+    FE --> RF{队列已空?}
+    RF -- "否 · BFS 循环" --> FE
+    RF -- "是" --> Ev[EvaluateAgent 审查者]
+    Ev --> RE{审查通过?}
+    RE -- "通过 / 放弃" --> Media[MediaProcessorAgent 媒体处理者]
+    RE -- "调整 < 3 次" --> CA[ConfigAdjustAgent 调整者]
+    RE -- "调整 ≥ 3 · 尚无规则" --> CG[CodeGenAgent 规则生成者]
+    RE -- "已有规则 · 深降级" --> RT[ReactTakeoverAgent 接管者]
+    RE -- "出错" --> St[StorageAgent 存储者]
+    CA --> Nav
+    CG --> Nav
+    RT -- "retry 重试" --> Nav
+    RT -- "give up 放弃" --> Media
+    Media --> St
+    St --> E([结束])
 ```
 
 **9 个编排级 Agent**（`graph/agents.py`，统一继承 `BaseAgent` 模板方法——轨迹记录、异常隔离、耗时统计）：

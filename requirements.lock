@@ -1,0 +1,19 @@
+# 精确锁定版依赖（可复现安装：CI 与 Dockerfile 均按此安装）。
+# 生成方式：requirements.txt 的 16 个直接依赖在当前已验证环境冻结为 == 版本。
+# 日常升级：改 requirements.txt 的约束后重新冻结；dependabot 每周自动提出升级 PR。
+python-dotenv==1.2.2
+requests==2.34.2
+beautifulsoup4==4.15.0
+urllib3==2.7.0
+openai==2.51.0
+PyMySQL==1.2.0
+langgraph==1.2.10
+langchain==1.3.14
+langchain-openai==1.4.1
+pyinstaller==6.21.0
+playwright==1.61.0
+pydantic==2.13.4
+tenacity==9.1.4
+fastapi==0.141.1
+uvicorn==0.52.1
+mcp==2.0.0
