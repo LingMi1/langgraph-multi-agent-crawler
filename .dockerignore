@@ -1,0 +1,38 @@
+# VCS
+.git
+.gitignore
+.github
+
+# Python caches & virtualenvs
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+venv/
+.venv/
+
+# Runtime data (harvest output, DBs, traces) — never baked into the image
+output/
+reports/
+history.db
+*.db
+*.sqlite
+*.sqlite3
+
+# Desktop/build artifacts
+dist/
+build/
+*.spec
+*.exe
+
+# Secrets & local config
+.env
+*.local
+
+# Editor/OS junk
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

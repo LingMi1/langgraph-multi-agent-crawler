@@ -2,6 +2,12 @@
 
 [English](README.md)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](pyproject.toml)
+[![Tests](https://img.shields.io/badge/tests-271%20passed-brightgreen.svg)](tests)
+[![Docs: English](https://img.shields.io/badge/docs-English-blue.svg)](docs/en/README.md)
+[![Docs: 简体中文](https://img.shields.io/badge/docs-简体中文-red.svg)](docs/zh-CN/README.md)
+
 **一个基于 LangGraph Supervisor 多智能体架构的企业级网页采集系统。** 不是"每页都调 LLM"的爬虫——而是确定性优先的流水线：9 个专职 Agent（侦察 → 导航 → 抓取清洗 → 质量评估 → 媒体处理 → 落盘）自动化整站全流程，LLM 只是**增强项、绝不是依赖项**——每个节点失败都有一条不依赖模型的降级出路。
 
 ## 为什么做这个

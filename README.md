@@ -2,6 +2,12 @@
 
 [简体中文](README.zh-CN.md)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](pyproject.toml)
+[![Tests](https://img.shields.io/badge/tests-271%20passed-brightgreen.svg)](tests)
+[![Docs: English](https://img.shields.io/badge/docs-English-blue.svg)](docs/en/README.md)
+[![Docs: 简体中文](https://img.shields.io/badge/docs-简体中文-red.svg)](docs/zh-CN/README.md)
+
 **A multi-agent web harvesting system built from the ground up on LangGraph's Supervisor pattern.** Not a crawler that hands every page to an LLM — a deterministic-first pipeline where 9 specialist agents (scout → navigate → fetch/extract → evaluate → media → store) automate the full lifecycle of a site, and the LLM is an *enhancer, never a dependency*: every node has a fallback that runs without the model.
 
 ## Why this exists
