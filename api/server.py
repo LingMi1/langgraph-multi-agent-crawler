@@ -844,6 +844,8 @@ async def orchestrator_classification(
             "ywlx2": r.get("ywlx2", "") or "",
             "ywlx3": r.get("ywlx3", "") or "",
             "ywlx4": r.get("ywlx4", "") or "",
+            # 真实标题：SSE 事件不携带 title，前端树用它补全叶子显示
+            "title": r.get("title", "") or "",
             # 重复内容行标记（前端树里置灰，点开显示去重提示）
             "dup": "true" if (r.get("html") or "").lstrip().startswith("<!-- duplicate") else "false",
         }

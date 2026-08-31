@@ -10,12 +10,6 @@
 <script src="vendor/purify.min.js"></script>
 <script src="vendor/jszip.min.js"></script>
 <script src="vendor/FileSaver.min.js"></script>
-<script type="module">
-import {EditorView, EditorState, basicSetup, markdown, html, oneDark, undo, redo, jsBeautify} from "./vendor/codemirror.bundle.mjs";
-window.CodeMirrorModule = {EditorView, EditorState, basicSetup, markdown, html, oneDark};
-window.CodeMirrorCmd = {undo, redo};
-window.jsBeautify = jsBeautify;
-</script>
 <style>
   :root {
     --primary: #0D9488;
@@ -233,8 +227,7 @@ window.jsBeautify = jsBeautify;
   /* 全屏预览：覆盖整屏，仍能滚动查看长内容；保留小边距避免贴边 */
   .preview-panel-fullscreen { position: fixed !important; inset: 12px !important; z-index: 9999 !important; flex: none !important; min-width: 0 !important; max-width: none !important; box-shadow: 0 12px 40px rgba(0,0,0,0.18); }
   .preview-panel-fullscreen #tabRender,
-  .preview-panel-fullscreen #tabRaw,
-  .preview-panel-fullscreen #tabEdit { min-height: calc(100vh - 140px) !important; }
+  .preview-panel-fullscreen #tabRaw { min-height: calc(100vh - 140px) !important; }
   .history-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
   .history-head h3 { font-size: 16px; font-weight: 600; margin: 0; }
   .close-btn { background: none; border: none; color: var(--text-sec); cursor: pointer; font-size: 18px; padding: 4px; line-height: 1; transition: color 150ms ease; }
@@ -395,7 +388,6 @@ window.jsBeautify = jsBeautify;
         </div>
         <button class="preview-tab active" data-tab="render" onclick="switchTab('render')" style="padding:10px 20px;border:none;background:none;color:var(--primary);cursor:pointer;border-bottom:2px solid var(--primary);font-family:inherit;font-size:14px;font-weight:500;transition:color 150ms ease;">渲染预览</button>
         <button class="preview-tab" data-tab="raw" onclick="switchTab('raw')" style="padding:10px 20px;border:none;background:none;color:var(--text-sec);cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;font-size:14px;font-weight:500;transition:color 150ms ease;">原始 HTML</button>
-        <button class="preview-tab" data-tab="edit" onclick="switchTab('edit')" style="padding:10px 20px;border:none;background:none;color:var(--text-sec);cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;font-size:14px;font-weight:500;transition:color 150ms ease;">编辑</button>
         <span id="previewBadge" class="version-badge" style="display:none;"></span>
         <button id="btnFullscreenPreview" onclick="toggleFullscreenPreview()" title="全屏预览（再点还原）" style="margin-left:auto;padding:6px 10px;border:1px solid var(--border);background:#fff;color:var(--text-sec);cursor:pointer;border-radius:6px;font-family:inherit;font-size:13px;display:inline-flex;align-items:center;gap:4px;transition:all 150ms ease;">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
@@ -404,18 +396,6 @@ window.jsBeautify = jsBeautify;
       </div>
       <div id="tabRender" class="render-preview" style="min-height:300px;"></div>
       <div id="tabRaw" style="display:none;min-height:300px;"></div>
-      <div id="editToolbar" class="edit-toolbar" style="display:none;">
-        <button class="btn btn-secondary btn-sm" onclick="undoEdit()">撤销</button>
-        <button class="btn btn-secondary btn-sm" onclick="redoEdit()">重做</button>
-        <button class="btn btn-secondary btn-sm" onclick="formatEdit()">格式化</button>
-        <button class="btn btn-secondary btn-sm" onclick="refreshRenderFromEdit()">刷新预览</button>
-      </div>
-      <div id="tabEdit" style="display:none;min-height:300px;"></div>
-      <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;">
-        <button class="btn btn-secondary" onclick="copyHtml()">复制 HTML</button>
-        <button class="btn btn-secondary" onclick="downloadCurrentPage()">下载此页 .html</button>
-        <button class="btn btn-accent" id="btnSaveEdit" style="display:none;" onclick="saveEdit()">保存修改</button>
-      </div>
     </div>
   </div>
   <!-- 数据库地址栏：导入成功后自动显示，一键复制完整地址 -->
@@ -439,7 +419,6 @@ window.jsBeautify = jsBeautify;
       <button class="btn btn-primary" onclick="saveAllResults()" title="选择本机目录，按 output/<域名>/栏目/标题.html 结构保存全部爬取结果（重复页已排除）；浏览器不支持时下载 zip">保存全部结果</button>
       <button class="btn btn-primary" onclick="exportCsv()">导出 content_001 CSV</button>
       <button class="btn btn-accent" onclick="importToDb(event)">一键导入数据库</button>
-      <button class="btn btn-secondary" onclick="downloadSummary()">下载统计报告 .json</button>
       <button class="btn btn-secondary" onclick="prevStep()">上一步</button>
       <button class="btn btn-secondary" onclick="startNew()">开始新任务</button>
     </div>
@@ -512,9 +491,7 @@ let historyCache = [];   // 历史记录（服务端 SQLite，GET /history 拉�
 let currentStep = WizardState.currentStep || 1;
 let currentPageMd = {};
 let currentEditPath = null;
-let cmEditor = null;
-let rawEditor = null;
-let editSourceUrl = null;   // cmEditor 当前对应哪一页（防渲染同步串页）
+let currentTab = 'render';
 let previewContent = '';   // 当前预览内容（任意 tab 兜底取用）
 let abortController = null;
 let crawlRunning = false;  // 爬取是否进行中（上一步需先停止再返回）
@@ -1130,6 +1107,8 @@ function renderPageList(filter) {
     let q = filter.toLowerCase();
     filtered = pageResults.filter(p => p.url.toLowerCase().includes(q) || (p.title||'').toLowerCase().includes(q));
   }
+  // 重复内容页不在列表显示（同内容只展示一份；重爬误标已在后端根治，此处兜底真同文多栏目）
+  if (pageYwlx) filtered = filtered.filter(p => { let i = pageYwlx[p.url]; return !i || i.dup !== 'true'; });
   if (filtered.length === 0) {
     div.innerHTML = '<p style="color:var(--text-sec);">暂无页面</p>';
     return;
@@ -1176,15 +1155,13 @@ function countYwlx(node) {
 
 function ywlxLeafHtml(p, depth) {
   let idx = pageResults.indexOf(p);
-  // 重复内容页（爬虫按标题+正文去重，只存一份）：置灰标注，避免点开空白误以为坏了
+  // 标题优先用 classification 接口的真实标题（SSE 事件不带 title）
   let info = pageYwlx[p.url];
-  let isDup = info && info.dup === 'true';
-  let dim = isDup ? 'opacity:0.55;' : '';
-  let dupTag = isDup ? ' <span style="font-size:11px;color:var(--text-sec);">(重复)</span>' : '';
+  let label = (info && info.title) || p.title || p.url || '';
   return `<div class="tree-leaf${currentPreviewPage && currentPreviewPage.url === p.url ? ' active' : ''}"
                 onclick="selectPage(pageResults[${idx}])" data-idx="${idx}"
-                style="padding-left:${28 + depth * 16}px;${dim}">
-             ${isDup ? '⧉' : statusIcon(p.success)} <span class="tree-label">${esc((p.title || p.url || '').slice(0, 45))}</span>${dupTag}
+                style="padding-left:${28 + depth * 16}px;">
+             ${statusIcon(p.success)} <span class="tree-label">${esc(label.slice(0, 45))}</span>
            </div>`;
 }
 
@@ -1495,11 +1472,8 @@ async function selectPage(pr) {
   }
   previewContent = mdContent;
   if (currentTab === 'raw') showRaw(mdContent);
-  else if (currentTab === 'edit') showEdit(mdContent);
   else showRender(mdContent, {notice: cleanedFallbackNotice ? '⚠️ 此页无清洗后版本（可能因内容过短被跳过），当前显示的是原始内容。' : ''});
 }
-
-let currentTab = 'render';
 
 function switchCleanMode(mode) {
   currentCleanMode = mode;
@@ -1525,27 +1499,17 @@ function switchCleanMode(mode) {
 }
 
 function switchTab(tab) {
-  // 清洗后模式也允许编辑
-  // if (tab === 'edit' && currentCleanMode === 'cleaned') return;
   currentTab = tab;
   document.querySelectorAll('.preview-tab').forEach(b => { b.style.color='var(--text-sec)'; b.style.borderBottom='2px solid transparent'; });
   let btn = document.querySelector(`.preview-tab[data-tab="${tab}"]`);
   if (btn) { btn.style.color='var(--primary)'; btn.style.borderBottom='2px solid var(--primary)'; }
   document.getElementById('tabRender').style.display = tab==='render'?'block':'none';
   document.getElementById('tabRaw').style.display = tab==='raw'?'block':'none';
-  document.getElementById('tabEdit').style.display = tab==='edit'?'block':'none';
-  document.getElementById('editToolbar').style.display = tab==='edit'?'flex':'none';
-  document.getElementById('btnSaveEdit').style.display = tab==='edit'?'inline-flex':'none';
-  // 渲染 tab：若编辑器里保存着当前页的未刷新修改，直接以编辑器内容渲染
-  if (tab === 'render' && cmEditor && editSourceUrl === currentPreviewPage?.url) {
-    showRender(cmEditor.state.doc.toString());
-    return;
-  }
-  // Populate raw/edit content on switch — 按当前模式从对应缓存取
-  if (currentPreviewPage) {
+  // 切到原始 HTML：按当前模式从对应缓存取内容，未缓存则请求接口
+  if (tab === 'raw' && currentPreviewPage) {
     let cache = currentCleanMode === 'cleaned' ? currentPageMdCleaned : currentPageMd;
     let mdContent = cache[currentPreviewPage.url];
-    if (currentCleanMode === 'cleaned' && !cleanedDir) return; // 无清洗目录时不加载
+    if (currentCleanMode === 'cleaned' && !cleanedDir) return;
     if (!mdContent && currentPreviewPage.filename) {
       let token = getToken();
       let endpoint = currentCleanMode === 'cleaned' && cleanedDir
@@ -1553,16 +1517,14 @@ function switchTab(tab) {
         : `/orchestrator/result/${currentPreviewPage.result_dir}/${currentPreviewPage.filename}`;
       let headers = {};
       if (token) headers['Authorization'] = 'Bearer ' + token;
-      fetch(endpoint, {
-        headers: headers
-      }).then(resp => resp.ok ? resp.text() : null).then(text => {
-        if (text) { cache[currentPreviewPage.url] = text; }
-        if (currentTab === 'raw') showRaw(cache[currentPreviewPage.url] || '');
-        else if (currentTab === 'edit') showEdit(cache[currentPreviewPage.url] || '');
-      });
-    } else if (mdContent || currentTab !== 'render') {
-      if (tab === 'raw') showRaw(mdContent || '');
-      else if (tab === 'edit') showEdit(mdContent || '');
+      fetch(endpoint, { headers: headers })
+        .then(resp => resp.ok ? resp.text() : null)
+        .then(text => {
+          if (text) { cache[currentPreviewPage.url] = text; }
+          if (currentTab === 'raw') showRaw(cache[currentPreviewPage.url] || '');
+        });
+    } else if (mdContent) {
+      showRaw(mdContent);
     }
   }
 }
@@ -1624,114 +1586,15 @@ function showRender(md, opts) {
 function showRaw(md) {
   previewContent = md || '';
   updateBadge(previewContent);
+  // 纯文本展示（不用 CodeMirror：编辑器多实例会崩，只需只读查看源码）
   let div = document.getElementById('tabRaw');
-  div.innerHTML = '';
-  if (rawEditor) rawEditor.destroy();
-  let {EditorView, EditorState, basicSetup, markdown, html, oneDark} = window.CodeMirrorModule;
-  // 只读 CodeMirror：与编辑 tab 同一套高亮，阅读源码更清晰
-  let lang = looksLikeHtml(md) ? html() : markdown();
-  rawEditor = new EditorView({
-    doc: md||'',
-    extensions: [basicSetup, lang, oneDark,
-      EditorView.editable.of(false), EditorState.readOnly.of(true)],
-    parent: div,
-  });
-}
-
-function showEdit(md) {
-  previewContent = md || '';
-  updateBadge(previewContent);
-  let div = document.getElementById('tabEdit');
-  div.innerHTML = '';
-  if (cmEditor) cmEditor.destroy();
-  let {EditorView, basicSetup, markdown, html, oneDark} = window.CodeMirrorModule;
-  // 内容为结构化 HTML 时用 HTML 语法高亮编辑，否则用 Markdown（兼容旧 .md 数据）
-  let lang = looksLikeHtml(md) ? html() : markdown();
-  editSourceUrl = currentPreviewPage ? currentPreviewPage.url : null;
-  cmEditor = new EditorView({
-    doc: md||'',
-    extensions: [basicSetup, lang, oneDark],
-    parent: div,
-  });
-  cmEditor.focus();
-}
-
-function undoEdit() { if (cmEditor) { window.CodeMirrorCmd.undo(cmEditor); cmEditor.focus(); } }
-function redoEdit() { if (cmEditor) { window.CodeMirrorCmd.redo(cmEditor); cmEditor.focus(); } }
-
-function formatEdit() {
-  if (!cmEditor) return;
-  let doc = cmEditor.state.doc.toString();
-  if (!looksLikeHtml(doc)) { alert('仅 HTML 内容支持格式化'); return; }
-  let b = window.jsBeautify;
-  if (!b) return;
-  let format = b.html || b;
-  let formatted = format(doc, {indent_size: 2, preserve_newlines: true, max_preserve_newlines: 2, wrap_line_length: 120});
-  cmEditor.dispatch({changes: {from: 0, to: doc.length, insert: formatted}});
-}
-
-function refreshRenderFromEdit() {
-  if (!cmEditor) return;
-  showRender(cmEditor.state.doc.toString());
-  switchTab('render');
+  div.innerHTML = '<pre style="margin:0;padding:16px;overflow:auto;max-height:70vh;background:#f8fafc;border:1px solid var(--border);border-radius:6px;font-family:Consolas,Menlo,monospace;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;">' + esc(md || '') + '</pre>';
 }
 
 function getCurrentContent() {
-  if (cmEditor) return cmEditor.state.doc.toString();
-  if (rawEditor) return rawEditor.state.doc.toString();
   return previewContent || '';
 }
 
-async function saveEdit() {
-  if (!cmEditor || !currentPreviewPage) return;
-  let content = cmEditor.state.doc.toString();
-
-  // 本地缓存（现有逻辑）
-  if (currentCleanMode === 'cleaned') {
-    currentPageMdCleaned[currentPreviewPage.url] = content;
-  } else {
-    currentPageMd[currentPreviewPage.url] = content;
-  }
-  WizardState.edits = WizardState.edits || {};
-  let editKey = currentCleanMode === 'cleaned' ? 'cleaned_' + currentPreviewPage.url : currentPreviewPage.url;
-  WizardState.edits[editKey] = content;
-  saveWizardState();
-
-  // 持久化到服务器（写回 raw 或 cleaned 文件）
-  let dir = currentCleanMode === 'cleaned' ? cleanedDir : currentPreviewPage.result_dir;
-  if (!dir || !currentPreviewPage.filename) { alert('缺少目录/文件名，仅保存到本地'); return; }
-  try {
-    let token = getToken();
-    let headers = {'Content-Type':'application/json'};
-    if (token) headers['Authorization'] = 'Bearer ' + token;
-    let resp = await fetch(`/orchestrator/save/${encodeURIComponent(dir)}/${encodeURIComponent(currentPreviewPage.filename)}`, {
-      method: 'POST', headers: headers, body: JSON.stringify({content: content})
-    });
-    if (resp.ok) alert('修改已保存');
-    else alert('保存失败: ' + (await resp.text()));
-  } catch(e) {
-    alert('保存失败（已保留本地）: ' + e.message);
-  }
-}
-
-function copyHtml() {
-  let content = getCurrentContent();
-  if (!content) return;
-  navigator.clipboard.writeText(content).then(() => alert('已复制到剪贴板'));
-}
-
-function sanitizeFilePart(s) {
-  return (s || 'page').replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim() || 'page';
-}
-
-function downloadCurrentPage() {
-  let content = getCurrentContent();
-  if (!content) return;
-  let blob = new Blob([content], {type:'text/html;charset=utf-8'});
-  saveAs(blob, sanitizeFilePart(currentPreviewPage?.title)+'.html');
-}
-
-// 保存全部爬取结果：优先选本机目录、按 output 结构写入；浏览器不支持时回退下载 zip
 async function saveAllResults() {
   let dir = (crawlMetrics && crawlMetrics.result_dir) || (pageResults[0] && pageResults[0].result_dir) || '';
   if (!dir) { alert('当前没有可保存的批次，请先完成一次爬取'); return; }
@@ -1773,22 +1636,6 @@ async function saveAllResults() {
   }
   // 回退：不支持目录选择（Firefox/Safari）或写入失败 → 下载 zip
   saveAs(blob, dir.replace(/[^a-zA-Z0-9._-]/g, '_') + '_results.zip');
-}
-
-function downloadSummary() {
-  let summary = {
-    url: WizardState.url,
-    timestamp: new Date().toISOString(),
-    pageCount: pageResults.length,
-    metrics: crawlMetrics?.metrics || {},
-    verdict: crawlMetrics?.verdict || '',
-    feedback: crawlMetrics?.feedback || '',
-    cleaned_dir: cleanedDir || '',
-    clean_stats: cleanStats || {},
-    pages: pageResults,
-  };
-  let blob = new Blob([JSON.stringify(summary, null, 2)], {type:'application/json;charset=utf-8'});
-  saveAs(blob, 'run_summary.json');
 }
 
 // 导出当前批次的 content_001 CSV（含 ywlx1-4 栏目层级，供导入数据库）

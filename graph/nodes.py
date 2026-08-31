@@ -2326,6 +2326,10 @@ async def config_adjust_node(state: CrawlerState) -> dict:
         "queue": queue,
         "seen_url_keys": [_url_key(seed_url)],
         "crawled_results": [],  # 清空，重新抓取
+        # ★ 内容指纹必须同步清空：重爬时第一轮已提取的页面会全部命中指纹被标「重复」，
+        #   storage 覆盖写 CSV 后占位行顶掉真实行 → 查看结果全是重复、无可点开的页面。
+        #   磁盘不会重复写：save 层有 内容MD5/正文MD5/URL 三层去重，命中时复用首存文件。
+        "seen_hashes": [],
     }
 
 
