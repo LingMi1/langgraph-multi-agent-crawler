@@ -279,11 +279,13 @@ _WORKBENCH_DIR = Path(__file__).resolve().parent / "static" / "workbench"
 _CONFIG_PATH = PROJECT_ROOT / "config.json"
 _OUTPUT_DIR = PROJECT_ROOT / "output"
 
-# 8 phase → 6 DAG 节点映射（scout/navigate/fetch/rescue_locate/rescue/evaluate/media/storage）
+# 8 phase → 9 DAG 节点映射（scout/navigate/fetch(+rescue)/evaluate/config_adjust/code_gen/react/media/storage）
 _NODE_BY_PHASE = {
-    "scout": "probe", "navigate": "derive", "fetch": "crawl",
-    "rescue_locate": "crawl", "rescue": "crawl",
-    "evaluate": "validate", "media": "clean", "storage": "finalize",
+    "scout": "scout", "navigate": "navigate", "fetch": "fetch_extract",
+    "rescue_locate": "fetch_extract", "rescue": "fetch_extract",
+    "evaluate": "evaluate", "config_adjust": "config_adjust",
+    "code_gen": "code_gen", "react": "react",
+    "media": "media_processor", "storage": "storage",
 }
 _DOMAIN_RE = re.compile(r"^[a-zA-Z0-9.\-:]+$")   # 域名（含端口）防路径穿越
 _FILEID_RE = re.compile(r"^[0-9a-f]{16}\.html$")  # 文件名=url 的 md5 前 16 位
@@ -1049,20 +1051,27 @@ async def history_clear(
 # ── SSE 适配层：/orchestrator/stream ──
 def _node_state_for(node: str, req: OrchestratorStreamRequest, page_count: int,
                     domain: str, rows_count: int = 0) -> Dict[str, Any]:
-    """给前端 nodeDetails 面板提供展示用的占位 state（boyushixi 无博宇对应指标）。"""
-    if node == "probe":
+    """给前端 nodeDetails 面板提供展示用的占位 state（对齐 9 个真实 Agent 节点）。"""
+    if node == "scout":
         return {"probe": {"site_mode": req.site_mode, "status_code": 200,
                           "encoding": "utf-8", "is_spa_likely": False,
                           "robots_forbidden": False, "mode_conflict": ""}}
-    if node == "derive":
+    if node == "navigate":
         return {"strategy": {"content_filter": "auto", "pruning_threshold": 0.2,
                              "scan_full_page": True, "js_steps": 0}}
-    if node == "crawl":
+    if node == "fetch_extract":
         return {"page_count": page_count}
-    if node == "validate":
+    if node == "evaluate":
         return {"metrics": {"non_empty_ratio": 1.0, "noise_ratio": 0.0, "encoding_ok": True},
                 "verdict": "pass", "feedback": "内容质量通过"}
-    if node == "clean":
+    if node == "config_adjust":
+        return {"adjustment": {"count": 1, "needs_js_render": False,
+                               "recommended_ua": ""}}
+    if node == "code_gen":
+        return {"rule_gen": {"attempted": True, "rule_count": 0}}
+    if node == "react":
+        return {"react": {"decision": "giveup", "summary": "深降级自主接管"}}
+    if node == "media_processor":
         return {"cleaned_dir": domain,
                 "clean_stats": {"total": rows_count, "cleaned": rows_count,
                                 "partial": 0, "skipped": 0, "failed": 0}}
@@ -1119,14 +1128,14 @@ async def _run_crawl_stream(task: Dict[str, Any], req: OrchestratorStreamRequest
                       _state: Dict[str, Any] = state, _domain: str = domain) -> None:
             _notify_llm_failed()  # 每次进度回调顺带检查 LLM 熔断 → 通知前端
             node = _NODE_BY_PHASE.get(phase, "crawl")
-            if node == "clean":
+            if node == "media_processor":
                 _state["saw_clean"] = True
             if node != _state["node"]:
                 if _state["node"] is not None:
                     emit({"type": "node_end", "node": _state["node"],
                           "state": _node_state_for(_state["node"], req, _state["fetched"], _domain)})
-                if node == "crawl" and _state["saw_fetch"]:
-                    # evaluate 调整后重爬 = 博宇「换策略重试」语义
+                if node == "fetch_extract" and _state["saw_fetch"]:
+                    # evaluate 调整后重抓 = 「换策略重试」语义（回跳 navigate→fetch_extract）
                     _state["attempt"] += 1
                     emit({"type": "retry", "attempt": _state["attempt"]})
                 _state["node"] = node
@@ -1159,22 +1168,22 @@ async def _run_crawl_stream(task: Dict[str, Any], req: OrchestratorStreamRequest
             task["error"] = f"{type(e).__name__}: {e}"
             task["logs"].append(f"[api] {url} 爬取失败: {task['error']}")
 
-        # 该站收尾：关掉当前节点 → finalize（带 result_dir）→ 下一站
+        # 该站收尾：关掉当前节点 → storage（带 result_dir）→ 下一站
         _notify_llm_failed()
         rows = _read_csv_rows(domain)
-        if state.get("saw_clean") and state["node"] == "finalize":
+        if state.get("saw_clean") and state["node"] == "storage":
             # _progress 阶段 CSV 尚未落盘，clean_stats.total 为 0；此处用真实行数补发
-            emit({"type": "node_end", "node": "clean",
-                  "state": _node_state_for("clean", req, state["fetched"], domain,
+            emit({"type": "node_end", "node": "media_processor",
+                  "state": _node_state_for("media_processor", req, state["fetched"], domain,
                                            rows_count=len(rows))})
-        if state["node"] is not None and state["node"] != "finalize":
+        if state["node"] is not None and state["node"] != "storage":
             emit({"type": "node_end", "node": state["node"],
                   "state": _node_state_for(state["node"], req, state["fetched"], domain,
                                            rows_count=len(rows))})
-        if state["node"] != "finalize":
-            emit({"type": "node_start", "node": "finalize"})
-        emit({"type": "node_end", "node": "finalize",
-              "state": _node_state_for("finalize", req, state["fetched"], domain,
+        if state["node"] != "storage":
+            emit({"type": "node_start", "node": "storage"})
+        emit({"type": "node_end", "node": "storage",
+              "state": _node_state_for("storage", req, state["fetched"], domain,
                                        rows_count=len(rows))})
 
     task["status"] = "done" if not any_failed else "failed"

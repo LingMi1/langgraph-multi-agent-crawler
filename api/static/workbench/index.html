@@ -344,7 +344,7 @@ window.jsBeautify = jsBeautify;
     <!-- Right: DAG -->
     <div class="card">
       <h3 style="margin-bottom:12px;">流程可视化</h3>
-      <svg id="dagSvg" viewBox="0 0 400 620" style="width:100%;"></svg>
+      <svg id="dagSvg" viewBox="0 0 400 850" style="width:100%;"></svg>
       <div id="nodeDetails" style="font-size:12px;color:var(--text-sec);margin-top:12px;"></div>
       <div id="retryLabel" style="display:none;color:var(--warning);font-size:13px;text-align:center;margin-top:8px;"></div>
     </div>
@@ -506,7 +506,7 @@ let editSourceUrl = null;   // cmEditor 当前对应哪一页（防渲染同步�
 let previewContent = '';   // 当前预览内容（任意 tab 兜底取用）
 let abortController = null;
 let crawlRunning = false;  // 爬取是否进行中（上一步需先停止再返回）
-let dagNodeStates = {probe:'waiting', derive:'waiting', crawl:'waiting', validate:'waiting', clean:'waiting', finalize:'waiting'};
+let dagNodeStates = {scout:'waiting', navigate:'waiting', fetch_extract:'waiting', evaluate:'waiting', config_adjust:'waiting', code_gen:'waiting', react:'waiting', media_processor:'waiting', storage:'waiting'};
 let currentPageMdCleaned = {};   // url -> cleaned md 缓存
 let currentCleanMode = 'raw';    // 'raw' | 'cleaned'
 let cleanedDir = '';
@@ -689,6 +689,7 @@ let siteIndex = 0;          // 当前站点序号
 let currentSiteUrl = '';    // 当前站点 URL
 let sitePages = [];         // 当前站点页结果快照（每站历史记录用）
 let siteBaseIdx = 0;        // 当前站点页在 pageResults 中的起始下标（retry 时回滚）
+let savedSiteHistoryIds = {}; // url -> 本会话已写历史 id（图多轮收尾去重，只留最后一条）
 
 async function startCrawl() {
   abortController = new AbortController();
@@ -700,11 +701,12 @@ async function startCrawl() {
   currentSiteUrl = '';
   sitePages = [];
   siteBaseIdx = 0;
+  savedSiteHistoryIds = {};
   currentPageMdCleaned = {};
   cleanedDir = '';
   cleanStats = null;
   currentCleanMode = 'raw';
-  dagNodeStates = {probe:'waiting', derive:'waiting', crawl:'waiting', validate:'waiting', clean:'waiting', finalize:'waiting'};
+  dagNodeStates = {scout:'waiting', navigate:'waiting', fetch_extract:'waiting', evaluate:'waiting', config_adjust:'waiting', code_gen:'waiting', react:'waiting', media_processor:'waiting', storage:'waiting'};
   let siteBar = document.getElementById('siteBar');
   if (siteBar) siteBar.style.display = 'none';
 
@@ -795,7 +797,7 @@ function handleSseEvent(evt) {
       cleanedDir = '';
       cleanStats = null;
       currentCleanMode = 'raw';
-      dagNodeStates = {probe:'waiting', derive:'waiting', crawl:'waiting', validate:'waiting', clean:'waiting', finalize:'waiting'};
+      dagNodeStates = {scout:'waiting', navigate:'waiting', fetch_extract:'waiting', evaluate:'waiting', config_adjust:'waiting', code_gen:'waiting', react:'waiting', media_processor:'waiting', storage:'waiting'};
       renderDag();
       document.getElementById('retryLabel').style.display = 'none';
       document.getElementById('statusLabel').textContent = '站点 '+evt.index+'/'+evt.total+'：'+evt.url;
@@ -815,11 +817,11 @@ function handleSseEvent(evt) {
       if (evt.state) {
         updateNodeDetails(evt.node, evt.state);
       }
-      if (evt.node === 'clean' && evt.state) {
+      if (evt.node === 'media_processor' && evt.state) {
         cleanedDir = evt.state.cleaned_dir || '';
         cleanStats = evt.state.clean_stats || null;
       }
-      if (evt.node === 'finalize') {
+      if (evt.node === 'storage') {
         crawlMetrics = evt.state;
         WizardState.finalState = evt.state;
         saveWizardState();
@@ -923,32 +925,53 @@ function saveSiteHistory() {
     method: 'POST',
     headers: {'Content-Type': 'application/json', ...(token ? {'Authorization': 'Bearer '+token} : {})},
     body: JSON.stringify(body),
-  }).catch(() => {});
+  })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => {
+      if (!d || !d.id) return;
+      // 图多轮收尾（主爬 + rescue 复评）会对同一站重复触发：删掉上一轮记录，只留最新一条
+      let oldId = savedSiteHistoryIds[url];
+      savedSiteHistoryIds[url] = d.id;
+      if (oldId && oldId !== d.id) {
+        fetch('/history/' + oldId, {
+          method: 'DELETE',
+          headers: (token ? {'Authorization': 'Bearer '+token} : {}),
+        }).catch(() => {});
+      }
+    })
+    .catch(() => {});
 }
 
 function updateStatusLabel(node) {
-  let map = {probe:iconSvg('search',14)+' 探测网站信息...', derive:iconSvg('brain',14)+' 生成爬取策略...', crawl:iconSvg('spider',14)+' 正在爬取页面...', validate:iconSvg('microscope',14)+' 校验内容质量...', clean:iconSvg('broom',14)+' 正在清洗内容...', finalize:iconSvg('file-text',14)+' 生成报告...'};
+  let map = {scout:iconSvg('search',14)+' 侦察目标站点...', navigate:iconSvg('brain',14)+' 规划导航策略...', fetch_extract:iconSvg('spider',14)+' 正在抓取提取页面...', evaluate:iconSvg('microscope',14)+' 质量评估...', config_adjust:iconSvg('circle-dot',14)+' 配置调整/换策略重试...', code_gen:iconSvg('file-text',14)+' 生成抓取规则...', react:iconSvg('alert-triangle',14)+' 自主接管降级...', media_processor:iconSvg('broom',14)+' 媒体处理与清洗...', storage:iconSvg('folder',14)+' 存储落盘...'};
   document.getElementById('statusLabel').innerHTML = map[node] || node;
 }
 
 function updateNodeDetails(node, state) {
   let container = document.getElementById('nodeDetails');
   let html = '';
-  if (node === 'probe' && state.probe) {
+  if (node === 'scout' && state.probe) {
     let modeLabel = {auto:'自动识别', static:'静态官网', dynamic:'动态官网'}[state.probe.site_mode] || '自动识别';
     html = `模式: ${modeLabel} | 状态码: ${state.probe.status_code||'?'} | 编码: ${esc(state.probe.encoding||'?')} | SPA: ${state.probe.is_spa_likely?'是':'否'} | Robots: ${state.probe.robots_forbidden?'禁止':'允许'}`;
     if (state.probe.mode_conflict) {
       html = `<span style="color:var(--warning);">注意: ${esc(state.probe.mode_conflict)}</span><br>` + html;
     }
-  } else if (node === 'derive' && state.strategy) {
+  } else if (node === 'navigate' && state.strategy) {
     html = `过滤器: ${esc(state.strategy.content_filter||'?')} | 裁剪阈值: ${state.strategy.pruning_threshold||'?'} | 全页扫描: ${state.strategy.scan_full_page?'是':'否'} | JS步骤: ${(state.strategy.js_steps||[]).length} 个`;
-  } else if (node === 'crawl') {
-    html = `已爬取 ${state.page_count||0} 页`;
-  } else if (node === 'validate' && state.metrics) {
+  } else if (node === 'fetch_extract') {
+    html = `已抓取 ${state.page_count||0} 页`;
+  } else if (node === 'evaluate' && state.metrics) {
     html = `非空率: ${(state.metrics.non_empty_ratio*100).toFixed(0)}% | 噪点比: ${(state.metrics.noise_ratio*100).toFixed(0)}% | 编码: ${state.metrics.encoding_ok?'OK':'异常'}`;
     if (state.verdict === 'pass') html += ' ' + verdictIcon(true);
     else html += ' ' + verdictIcon(false) + ' ' + esc(state.feedback||'');
-  } else if (node === 'clean') {
+  } else if (node === 'config_adjust' && state.adjustment) {
+    let adj = state.adjustment;
+    html = `调整次数: ${adj.count||0} | 需要JS渲染: ${adj.needs_js_render?'是':'否'} | 建议UA: ${esc(adj.recommended_ua||'无')}`;
+  } else if (node === 'code_gen' && state.rule_gen) {
+    html = `尝试生成规则: ${state.rule_gen.attempted?'是':'否'} | 规则数: ${state.rule_gen.rule_count||0}`;
+  } else if (node === 'react' && state.react) {
+    html = `决策: ${state.react.decision==='giveup'?'放弃并接管':'策略接管'} | ${esc(state.react.summary||'')}`;
+  } else if (node === 'media_processor') {
     let cs = state.clean_stats || {};
     if (cs.error) {
       html = `清洗出错: ${esc(cs.error)}`;
@@ -957,7 +980,7 @@ function updateNodeDetails(node, state) {
     } else {
       html = '清洗未执行';
     }
-  } else if (node === 'finalize') {
+  } else if (node === 'storage') {
     html = `需复核: ${state.needs_review?'是':'否'} | 输出: ${esc(state.result_dir||'?')}`;
   }
   container.innerHTML = html;
@@ -982,15 +1005,19 @@ function stopCrawl() {
 }
 
 // ==================== DAG RENDERING ====================
+// 9 个真实 Agent 节点：scout → navigate → fetch_extract → evaluate → config_adjust / code_gen / react → media_processor → storage
 const DAG_NODES = [
-  {id:'probe', label:'探针', x:200, y:50},
-  {id:'derive', label:'策略', x:200, y:150},
-  {id:'crawl', label:'爬取', x:200, y:270},
-  {id:'validate', label:'校验', x:200, y:390},
-  {id:'clean', label:'清洗', x:200, y:490},
-  {id:'finalize', label:'收尾', x:200, y:590},
+  {id:'scout',           label:'侦察',     en:'scout',           x:200, y:45},
+  {id:'navigate',        label:'导航',     en:'navigate',        x:200, y:133},
+  {id:'fetch_extract',   label:'抓取提取', en:'fetch_extract',   x:200, y:221},
+  {id:'evaluate',        label:'质量评估', en:'evaluate',        x:200, y:309},
+  {id:'config_adjust',   label:'配置调整', en:'config_adjust',   x:200, y:397},
+  {id:'code_gen',        label:'规则生成', en:'code_gen',        x:200, y:485},
+  {id:'react',           label:'自主接管', en:'react',           x:200, y:573},
+  {id:'media_processor', label:'媒体处理', en:'media_processor', x:200, y:661},
+  {id:'storage',         label:'存储落盘', en:'storage',         x:200, y:749},
 ];
-const DAG_EDGES = [['probe','derive'], ['derive','crawl'], ['crawl','validate'], ['validate','clean'], ['clean','finalize']];
+const DAG_EDGES = [['scout','navigate'], ['navigate','fetch_extract'], ['fetch_extract','evaluate'], ['evaluate','config_adjust'], ['config_adjust','code_gen'], ['code_gen','react'], ['react','media_processor'], ['media_processor','storage']];
 let dagEls = {};
 
 // 只构建一次静态 SVG（连线/节点/标签 + 常驻光点）；之后状态变化只做补丁
@@ -1002,14 +1029,18 @@ function renderDag() {
     return `<path data-edge="${from}-${to}" d="M${fn.x},${fn.y+16} L${tn.x},${tn.y-16}" class="dag-edge" />`;
   }).join('\n');
   let rects = DAG_NODES.map(n => `<rect data-node="${n.id}" x="${n.x-48}" y="${n.y-16}" width="96" height="32" class="dag-node waiting" />`).join('\n');
-  let labels = DAG_NODES.map(n => `<text data-node="${n.id}" x="${n.x}" y="${n.y+5}" text-anchor="middle" fill="#94A3B8" font-size="12" font-family="Inter,Segoe UI,system-ui,sans-serif">${n.label}</text>`).join('\n');
+  let labels = DAG_NODES.map(n =>
+    `<text data-zh="${n.id}" x="${n.x}" y="${n.y-3}" text-anchor="middle" fill="#94A3B8" font-size="13" font-weight="600" font-family="Inter,Segoe UI,system-ui,sans-serif">${n.label}</text>` +
+    `<text data-en="${n.id}" x="${n.x}" y="${n.y+11}" text-anchor="middle" fill="#94A3B8" font-size="10" font-family="Inter,Segoe UI,system-ui,sans-serif">${n.en}</text>`
+  ).join('\n');
   svg.innerHTML = edges + rects + labels +
     `<circle id="flowDot" cx="0" cy="0" r="6" style="transform:translate(${DAG_NODES[0].x}px,${DAG_NODES[0].y-16}px)" />`;
   dagEls = {};
   DAG_NODES.forEach(n => {
     dagEls[n.id] = {
       rect: svg.querySelector('rect[data-node="'+n.id+'"]'),
-      text: svg.querySelector('text[data-node="'+n.id+'"]'),
+      tzh: svg.querySelector('text[data-zh="'+n.id+'"]'),
+      ten: svg.querySelector('text[data-en="'+n.id+'"]'),
       label: n.label,
     };
   });
@@ -1028,9 +1059,9 @@ function setNodeState(node, status) {
   els.rect.setAttribute('class', 'dag-node ' + status);
   els.rect.setAttribute('fill', fill);
   els.rect.setAttribute('stroke', color);
-  let prefix = status==='done' ? iconSvg('check',12)+' ' : status==='running' ? iconSvg('circle-dot',10)+' ' : '';
-  els.text.setAttribute('fill', status==='waiting' ? '#94A3B8' : '#1E293B');
-  els.text.innerHTML = prefix + els.label;
+  // 中文主标签：等待时灰色，运行/完成/出错时深色；英文小字恒为浅灰
+  els.tzh.setAttribute('fill', status==='waiting' ? '#94A3B8' : '#1E293B');
+  els.ten.setAttribute('fill', '#94A3B8');
   // 指向本节点的入边：仅当本节点 running 时点亮 marching-ants 流向
   let pred = DAG_EDGES.find(e => e[1]===node);
   if (pred && dagEls[pred[0]] && dagEls[pred[0]].edge) {
@@ -1970,7 +2001,6 @@ async function viewHistory(id) {
   cleanedDir = h.cleaned_dir || '';
   cleanStats = h.clean_stats || {};
   currentCleanMode = 'raw';
-  currentPageMdCleaned = {};
   saveWizardState();
   toggleHistory();
   showStep(3);

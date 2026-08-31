@@ -162,6 +162,14 @@ async def react_takeover_node(state: CrawlerState) -> dict:
 
     seed_url = state.get("seed_url", "")
 
+    # ★ 进度上报：ReAct 自主接管节点（前端 DAG「自主接管」）
+    _pcb = state.get("progress_callback")
+    if _pcb:
+        try:
+            _pcb(1, 1, seed_url, "react")
+        except Exception:
+            pass
+
     # LLM 惰性构造（与 evaluate 共用同一客户端与 TokenBudget 记账）
     from graph.nodes import _get_llm, _url_key
     llm = _get_llm()

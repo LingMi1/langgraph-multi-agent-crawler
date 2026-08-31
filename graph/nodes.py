@@ -2284,6 +2284,14 @@ async def config_adjust_node(state: CrawlerState) -> dict:
     seed_url = state.get("seed_url", "")
     profile_dict = state.get("site_profile", {})
 
+    # ★ 进度上报：LLM 配置调整节点（前端 DAG「配置调整」）
+    _pcb = state.get("progress_callback")
+    if _pcb:
+        try:
+            _pcb(1, 1, seed_url, "config_adjust")
+        except Exception:
+            pass
+
     evaluation = EvaluationResult(**evaluation_dict) if evaluation_dict else None
     if not evaluation:
         return {"error": "无评估结果，无法调整"}
@@ -5823,6 +5831,14 @@ async def code_gen_node(state: CrawlerState) -> dict:
     current_html = state.get("current_html", "")
 
     generation_attempted = state.get("generation_attempted", False)
+
+    # ★ 进度上报：LLM 规则生成节点（前端 DAG「规则生成」）
+    _pcb = state.get("progress_callback")
+    if _pcb:
+        try:
+            _pcb(1, 1, seed_url, "code_gen")
+        except Exception:
+            pass
 
     if generation_attempted:
         agent_logger.info("[Graph::code_gen] 已生成过规则，不再重复")
