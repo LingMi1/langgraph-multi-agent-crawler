@@ -12,5 +12,5 @@ playwright>=1.45.0
 pydantic>=2.0
 tenacity>=8.0
 fastapi>=0.110
-uvicorn>=0.29
+uvicorn>=0.52.4
 mcp>=2.0.0
