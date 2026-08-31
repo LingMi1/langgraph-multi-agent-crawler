@@ -41,15 +41,15 @@
 
 ## 界面截图
 
-对 [hnbn666.cn](http://www.hnbn666.cn/)（RuiQiCMS 可视化建站模板）的一次真实采集，通过 FastAPI 服务驱动：
+对 [hnbn666.cn](http://www.hnbn666.cn/)（RuiQiCMS 可视化建站模板）的一次真实采集——通过 CLI、FastAPI 服务与桌面 GUI 驱动：
 
-| 爬取控制台 — SSE 实时进度 + DAG 流程可视化 | 查看结果 — 按栏目层级的结果树 |
+| 第一步 · CLI 命令行爬取 — 实时节点日志 | 第二步 · Web 爬取控制台 — SSE 实时进度 + DAG 流程可视化 |
 |---|---|
-| ![爬取控制台](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/crawl-console.png) | ![查看结果](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/results-tree.png) |
+| ![CLI 终端](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/cli-terminal.png) | ![爬取控制台](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/crawl-console.png) |
 
-| 渲染预览 — 清洗后的页面 | 保存全部结果 .zip |
-|---|---|
-| ![渲染预览](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/page-preview.png) | ![保存全部结果](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/save-all-results.png) |
+| 桌面 GUI (tkinter) — 批量导入 URL + 逐站爬取 |
+|---|
+| ![桌面 GUI](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/gui-desktop.png) |
 
 ## 系统架构
 

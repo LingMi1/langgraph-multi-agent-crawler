@@ -39,15 +39,15 @@ This project is my answer: a supervisor graph with plan-and-execute and a review
 
 ## Screenshots
 
-A real crawl of [hnbn666.cn](http://www.hnbn666.cn/) (RuiQiCMS visual-builder template) through the FastAPI service:
+A real crawl of [hnbn666.cn](http://www.hnbn666.cn/) (RuiQiCMS visual-builder template) through the CLI, the FastAPI service, and the desktop GUI:
 
-| Crawl console — SSE live progress + DAG visualization | Result tree — section hierarchy |
+| Step 1 · CLI crawl — real-time node logs | Step 2 · Web crawl console — SSE live progress + DAG visualization |
 |---|---|
-| ![crawl console](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/crawl-console.png) | ![result tree](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/results-tree.png) |
+| ![cli terminal](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/cli-terminal.png) | ![crawl console](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/crawl-console.png) |
 
-| Cleaned page preview | Save all results as `.zip` |
-|---|---|
-| ![page preview](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/page-preview.png) | ![save all results](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/save-all-results.png) |
+| Desktop GUI (tkinter) — batch URL import + per-site crawl |
+|---|
+| ![desktop gui](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/gui-desktop.png) |
 
 ## Architecture
 
