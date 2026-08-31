@@ -894,6 +894,48 @@ def _zip_safe_seg(text: str, max_len: int = 60) -> str:
     return seg
 
 
+def _collect_output_files(result_dir: str, leaf_only: bool) -> List[tuple]:
+    """把 CSV 行整理成待导出文件列表 [(相对路径, 内容), ...]。
+
+    结构与小工具 output 一致：栏目1/栏目2/标题.html + crawl_results.csv。
+    排除重复/跳过占位行；同栏目同标题冲突时递增序号（_2/_3…）。
+    """
+    rows = _read_csv_rows(result_dir)
+    if not rows:
+        raise HTTPException(404, "结果 CSV 不存在")
+    if leaf_only:
+        leaf_rows = [r for r in rows if (r.get("ywlx1") or "").strip()]
+        if leaf_rows:
+            rows = leaf_rows
+
+    files: List[tuple] = []
+    used_paths: set = set()
+    for r in rows:
+        html = (r.get("html") or "").lstrip()
+        if html.startswith("<!--"):
+            continue  # 重复/跳过占位行（无内容文件），不导出
+        sub_dirs = [_zip_safe_seg(r.get(f"ywlx{i}", "")) for i in (1, 2, 3, 4)]
+        sub_dirs = [d for d in sub_dirs if d]
+        name = _zip_safe_seg(r.get("title", "")) or "page"
+        rel = "/".join(sub_dirs + [f"{name}.html"])
+        base_rel, n = rel, 2
+        while rel in used_paths:
+            rel = base_rel.replace(".html", f"_{n}.html")
+            n += 1
+        used_paths.add(rel)
+        files.append((rel, r.get("html") or ""))
+    # 过滤后的 CSV（与导出的 html 集合一致：无重复占位行）
+    csv_rows = [r for r in rows if not (r.get("html") or "").lstrip().startswith("<!--")]
+    if csv_rows:
+        csv_buf = io.StringIO()
+        w = csv.DictWriter(csv_buf, fieldnames=list(csv_rows[0].keys()))
+        w.writeheader()
+        for r in csv_rows:
+            w.writerow(r)
+        files.append(("crawl_results.csv", "\ufeff" + csv_buf.getvalue()))
+    return files
+
+
 @app.get("/orchestrator/output_zip")
 async def orchestrator_output_zip(
     result_dir: str = "",
@@ -901,7 +943,34 @@ async def orchestrator_output_zip(
     x_api_key: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
 ) -> Response:
-    """打包全部爬取结果为 zip（与小工具的 output 目录结构一致）。
+    """打包全部爬取结果为 zip（保留兼容旧入口；前端保存已改用 output_files 散文件）。"""
+    _check_api_key(_extract_key(x_api_key, authorization))
+    if not _DOMAIN_RE.match(result_dir):
+        raise HTTPException(404, "结果目录不存在")
+    files = _collect_output_files(result_dir, leaf_only == "true")
+    if not files:
+        raise HTTPException(404, "没有可导出的页面（全部为重复/占位行）")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for rel, content in files:
+            zf.writestr(f"{result_dir}/{rel}", content)
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{result_dir}_results.zip"'},
+    )
+
+
+@app.get("/orchestrator/output_files")
+async def orchestrator_output_files(
+    result_dir: str = "",
+    leaf_only: str = "false",
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    """返回全部爬取结果的散文件列表（前端选目录后直接逐文件写入本机，非 zip）。
 
     结构: <域名>/栏目1/栏目2/…/标题.html + crawl_results.csv。
     排除重复页：内容指纹判重产生的 <!-- duplicate …--> 占位行不导出。
@@ -909,52 +978,10 @@ async def orchestrator_output_zip(
     _check_api_key(_extract_key(x_api_key, authorization))
     if not _DOMAIN_RE.match(result_dir):
         raise HTTPException(404, "结果目录不存在")
-
-    rows = _read_csv_rows(result_dir)
-    if not rows:
-        raise HTTPException(404, "结果 CSV 不存在")
-    if leaf_only == "true":
-        leaf_rows = [r for r in rows if (r.get("ywlx1") or "").strip()]
-        if leaf_rows:
-            rows = leaf_rows
-
-    buf = io.BytesIO()
-    included = 0
-    used_paths: set = set()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for r in rows:
-            html = (r.get("html") or "").lstrip()
-            if html.startswith("<!--"):
-                continue  # 重复/跳过占位行（无内容文件），不导出
-            sub_dirs = [_zip_safe_seg(r.get(f"ywlx{i}", "")) for i in (1, 2, 3, 4)]
-            sub_dirs = [d for d in sub_dirs if d]
-            name = _zip_safe_seg(r.get("title", "")) or "page"
-            rel = "/".join(sub_dirs + [f"{name}.html"])
-            # 同栏目同标题冲突 → 标题_2/标题_3 递增（zip 内确定性去重）
-            base_rel, n = rel, 2
-            while rel in used_paths:
-                rel = base_rel.replace(".html", f"_{n}.html")
-                n += 1
-            used_paths.add(rel)
-            zf.writestr(f"{result_dir}/{rel}", r.get("html") or "")
-            included += 1
-        # 过滤后的 CSV（与导出的 html 集合一致：无重复占位行）
-        csv_buf = io.StringIO()
-        fieldnames = list(rows[0].keys())
-        w = csv.DictWriter(csv_buf, fieldnames=fieldnames)
-        w.writeheader()
-        for r in rows:
-            if not (r.get("html") or "").lstrip().startswith("<!--"):
-                w.writerow(r)
-        zf.writestr(f"{result_dir}/crawl_results.csv", "\ufeff" + csv_buf.getvalue())
-    if included == 0:
+    files = _collect_output_files(result_dir, leaf_only == "true")
+    if not files:
         raise HTTPException(404, "没有可导出的页面（全部为重复/占位行）")
-
-    return Response(
-        content=buf.getvalue(),
-        media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{result_dir}_results.zip"'},
-    )
+    return {"files": [{"path": f"{result_dir}/{rel}", "content": content} for rel, content in files]}
 
 
 @app.post("/orchestrator/import_db")

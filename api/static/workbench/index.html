@@ -1601,41 +1601,47 @@ async function saveAllResults() {
   let token = getToken();
   let headers = {};
   if (token) headers['Authorization'] = 'Bearer ' + token;
-  let blob;
+  let files;
   try {
-    let resp = await fetch('/orchestrator/output_zip?result_dir=' + encodeURIComponent(dir) + '&leaf_only=' + (getLeafOnly() ? 'true' : 'false'), { headers });
+    let resp = await fetch('/orchestrator/output_files?result_dir=' + encodeURIComponent(dir) + '&leaf_only=' + (getLeafOnly() ? 'true' : 'false'), { headers });
     if (!resp.ok) { alert('保存失败: ' + (await resp.text())); return; }
-    blob = await resp.blob();
+    let data = await resp.json();
+    files = data.files || [];
   } catch (e) { alert('保存失败: ' + e.message); return; }
+  if (!files.length) { alert('没有可保存的文件（全部为重复/占位行）'); return; }
 
-  // 首选：File System Access API 选目录直接写入（Chrome/Edge，localhost 可用）
-  if (window.showDirectoryPicker) {
-    try {
-      let root = await window.showDirectoryPicker({ mode: 'readwrite' });
-      let zip = await JSZip.loadAsync(blob);
-      let entries = Object.values(zip.files).filter(f => !f.dir);
-      let done = 0;
-      for (let entry of entries) {
-        let parts = entry.name.split('/').filter(Boolean);
-        let handle = root;
-        for (let i = 0; i < parts.length - 1; i++) {
-          handle = await handle.getDirectoryHandle(parts[i], { create: true });
-        }
-        let fh = await handle.getFileHandle(parts[parts.length - 1], { create: true });
-        let w = await fh.createWritable();
-        await w.write(await entry.async('blob'));
-        await w.close();
-        done++;
-      }
-      alert(`已保存 ${done} 个文件到所选目录（栏目结构 + crawl_results.csv，重复页已排除）`);
-      return;
-    } catch (e) {
-      if (e && e.name === 'AbortError') return; // 用户取消选目录
-      // 目录写入失败 → 落到下方 zip 下载回退
-    }
+  // 直接保存散文件（与小工具 output 目录结构一致），不做 zip
+  if (!window.showDirectoryPicker) {
+    alert('当前浏览器不支持选择保存目录（需 Chrome/Edge 新版本），无法保存散文件。\n请换 Chrome 或 Edge 打开页面后重试。');
+    return;
   }
-  // 回退：不支持目录选择（Firefox/Safari）或写入失败 → 下载 zip
-  saveAs(blob, dir.replace(/[^a-zA-Z0-9._-]/g, '_') + '_results.zip');
+  let root;
+  try {
+    root = await window.showDirectoryPicker({ mode: 'readwrite' });
+  } catch (e) {
+    if (e && e.name === 'AbortError') return; // 用户取消选目录
+    alert('无法打开目录选择框：' + (e && e.message || e));
+    return;
+  }
+  try {
+    let done = 0;
+    for (let f of files) {
+      let parts = f.path.split('/').filter(Boolean);
+      let handle = root;
+      for (let i = 0; i < parts.length - 1; i++) {
+        handle = await handle.getDirectoryHandle(parts[i], { create: true });
+      }
+      let fh = await handle.getFileHandle(parts[parts.length - 1], { create: true });
+      let w = await fh.createWritable();
+      let mime = f.path.toLowerCase().endsWith('.csv') ? 'text/csv;charset=utf-8' : 'text/html;charset=utf-8';
+      await w.write(new Blob([f.content], { type: mime }));
+      await w.close();
+      done++;
+    }
+    alert(`已保存 ${done} 个文件到所选目录（栏目结构 + crawl_results.csv，重复页已排除，与工具 output 一致）`);
+  } catch (e) {
+    alert('写入所选目录失败：' + (e && e.message || e) + '\n未保存，请换一个目录重试。');
+  }
 }
 
 // 导出当前批次的 content_001 CSV（含 ywlx1-4 栏目层级，供导入数据库）
