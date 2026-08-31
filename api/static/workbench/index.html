@@ -1601,46 +1601,52 @@ async function saveAllResults() {
   let token = getToken();
   let headers = {};
   if (token) headers['Authorization'] = 'Bearer ' + token;
-  let files;
+  let blob;
   try {
-    let resp = await fetch('/orchestrator/output_files?result_dir=' + encodeURIComponent(dir) + '&leaf_only=' + (getLeafOnly() ? 'true' : 'false'), { headers });
+    let resp = await fetch('/orchestrator/output_zip?result_dir=' + encodeURIComponent(dir) + '&leaf_only=' + (getLeafOnly() ? 'true' : 'false'), { headers });
     if (!resp.ok) { alert('保存失败: ' + (await resp.text())); return; }
-    let data = await resp.json();
-    files = data.files || [];
+    blob = await resp.blob();
   } catch (e) { alert('保存失败: ' + e.message); return; }
-  if (!files.length) { alert('没有可保存的文件（全部为重复/占位行）'); return; }
 
-  // 直接保存散文件（与小工具 output 目录结构一致），不做 zip
+  const zipName = dir.replace(/[^a-zA-Z0-9._-]/g, '_') + '_results.zip';
+  // 浏览器不支持选目录（Firefox/Safari/非安全上下文）→ 直接下载 zip
   if (!window.showDirectoryPicker) {
-    alert('当前浏览器不支持选择保存目录（需 Chrome/Edge 新版本），无法保存散文件。\n请换 Chrome 或 Edge 打开页面后重试。');
+    saveAs(blob, zipName);
+    alert('当前浏览器不支持选择保存目录，已直接下载「' + zipName + '」压缩包到下载目录。');
     return;
   }
+
+  // 首选：File System Access API 选目录直接写入（Chrome/Edge，localhost 可用）
   let root;
   try {
     root = await window.showDirectoryPicker({ mode: 'readwrite' });
   } catch (e) {
     if (e && e.name === 'AbortError') return; // 用户取消选目录
-    alert('无法打开目录选择框：' + (e && e.message || e));
+    saveAs(blob, zipName);
+    alert('无法打开目录选择框（' + (e && e.message || e) + '），已改为下载「' + zipName + '」压缩包。');
     return;
   }
   try {
+    let zip = await JSZip.loadAsync(blob);
+    let entries = Object.values(zip.files).filter(f => !f.dir);
     let done = 0;
-    for (let f of files) {
-      let parts = f.path.split('/').filter(Boolean);
+    for (let entry of entries) {
+      let parts = entry.name.split('/').filter(Boolean);
       let handle = root;
       for (let i = 0; i < parts.length - 1; i++) {
         handle = await handle.getDirectoryHandle(parts[i], { create: true });
       }
       let fh = await handle.getFileHandle(parts[parts.length - 1], { create: true });
       let w = await fh.createWritable();
-      let mime = f.path.toLowerCase().endsWith('.csv') ? 'text/csv;charset=utf-8' : 'text/html;charset=utf-8';
-      await w.write(new Blob([f.content], { type: mime }));
+      await w.write(await entry.async('blob'));
       await w.close();
       done++;
     }
-    alert(`已保存 ${done} 个文件到所选目录（栏目结构 + crawl_results.csv，重复页已排除，与工具 output 一致）`);
+    alert(`已保存 ${done} 个文件到所选目录（栏目结构 + crawl_results.csv，重复页已排除）`);
   } catch (e) {
-    alert('写入所选目录失败：' + (e && e.message || e) + '\n未保存，请换一个目录重试。');
+    // 写入失败不静默：明确提示原因，并回退下载 zip 备用
+    saveAs(blob, zipName);
+    alert('写入所选目录失败：' + (e && e.message || e) + '\n已改为下载「' + zipName + '」压缩包到下载目录。');
   }
 }
 
