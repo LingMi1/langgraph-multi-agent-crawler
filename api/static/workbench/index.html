@@ -340,7 +340,6 @@ window.jsBeautify = jsBeautify;
           <div id="progressBar" style="height:100%;width:0%;border-radius:4px;transition:width 0.3s;"></div>
         </div>
       </div>
-      <p id="depthInfo" style="font-size:13px;color:var(--text-sec);margin-bottom:12px;"></p>
       <div id="llmFailBanner" style="display:none;margin-bottom:12px;padding:12px 14px;background:#FEF3C7;border:1px solid #F59E0B;border-radius:8px;font-size:13px;color:#92400E;">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <span style="font-weight:600;">⚠️ LLM 连续调用失败，已降级为规则模式</span>
@@ -727,7 +726,6 @@ async function startCrawl() {
   document.getElementById('progressBar').style.width = '0%';
   document.getElementById('pageCounter').textContent = '0 页';
   document.getElementById('statusLabel').textContent = '连接中...';
-  document.getElementById('depthInfo').textContent = '';
   document.getElementById('retryLabel').style.display = 'none';
   document.getElementById('nodeDetails').textContent = '';
   let failBanner = document.getElementById('llmFailBanner');
@@ -850,7 +848,6 @@ function handleSseEvent(evt) {
       let pct = total > 0 ? Math.min(100, Math.round((evt.page_count / total) * 100)) : 0;
       document.getElementById('progressBar').style.width = pct+'%';
       document.getElementById('pageCounter').textContent = total > 0 ? evt.page_count+'/'+total+' 页' : evt.page_count+' 页';
-      document.getElementById('depthInfo').textContent = '深度: 第 '+(evt.depth||0)+' 层';
       let statusIconHtml = statusIcon(evt.success);
       let cls = evt.success ? 'success' : 'error';
       addLog(statusIconHtml+' '+esc(evt.url)+' — '+(evt.status_code||'?')+' — '+esc((evt.title||'').slice(0,30)), cls);

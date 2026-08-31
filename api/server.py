@@ -1145,7 +1145,7 @@ async def _run_crawl_stream(task: Dict[str, Any], req: OrchestratorStreamRequest
                 _state["fetched"] = fetched
                 emit({
                     "type": "page_crawled", "url": u, "status_code": 200,
-                    "success": True, "title": "", "depth": 0,
+                    "success": True, "title": "",
                     "page_count": fetched, "result_dir": _domain,
                     "filename": _file_id(u),
                     # 动态分母：已抓 + 队列剩余（边爬边发现新页，总量会增长）
