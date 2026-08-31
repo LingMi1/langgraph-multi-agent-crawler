@@ -1148,6 +1148,9 @@ async def _run_crawl_stream(task: Dict[str, Any], req: OrchestratorStreamRequest
                     "success": True, "title": "", "depth": 0,
                     "page_count": fetched, "result_dir": _domain,
                     "filename": _file_id(u),
+                    # 动态分母：已抓 + 队列剩余（边爬边发现新页，总量会增长）
+                    "pending": queue_len,
+                    "total": fetched + queue_len,
                 })
             elif phase == "media":
                 emit({"type": "cleaning_progress", "file": u, "status": "cleaned",

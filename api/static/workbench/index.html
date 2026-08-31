@@ -249,10 +249,23 @@ window.jsBeautify = jsBeautify;
 <!-- ===== HEADER ===== -->
 <header style="display:flex;justify-content:space-between;align-items:center;padding:0 24px;height:56px;background:#FFFFFF;border-bottom:1px solid var(--border);">
   <div style="display:flex;align-items:center;gap:10px;">
-    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#0D9488" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="12" cy="12" r="10"/>
-      <ellipse cx="12" cy="12" rx="4" ry="10"/>
-      <path d="M2 12h20"/>
+    <svg width="28" height="28" viewBox="0 0 32 32" style="flex-shrink:0;">
+      <defs>
+        <linearGradient id="logoGrad" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#2DD4BF"/>
+          <stop offset="0.55" stop-color="#14B8A6"/>
+          <stop offset="1" stop-color="#0D9488"/>
+        </linearGradient>
+      </defs>
+      <rect x="1" y="1" width="30" height="30" rx="8" fill="url(#logoGrad)"/>
+      <!-- 郁金香：三尖杯形花苞 + 微弯花茎 + 一片侧叶 -->
+      <g fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10.5 7 C10.5 11 11.5 14.5 13.5 16.8"/>
+        <path d="M21.5 7 C21.5 11 20.5 14.5 18.5 16.8"/>
+        <path d="M10.5 7 C12 9 14 10.8 16 10.8 C18 10.8 20 9 21.5 7"/>
+        <path d="M16 18.2 C15.7 21 16.3 24 15.6 26.8"/>
+        <path d="M15.8 23.5 C13.8 21.8 11.8 21.6 9.8 22.8"/>
+      </g>
     </svg>
     <span style="font-size:17px;font-weight:600;color:var(--text);">langgraph-multi-agent-crawler</span>
   </div>
@@ -321,7 +334,7 @@ window.jsBeautify = jsBeautify;
       <h3 id="statusLabel" style="margin-bottom:12px;">准备中...</h3>
       <div style="margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;">
-          <span>已完成</span><span id="pageCounter">0/50 页</span>
+          <span>已完成</span><span id="pageCounter">0 页</span>
         </div>
         <div style="height:8px;background:var(--border);border-radius:4px;overflow:hidden;">
           <div id="progressBar" style="height:100%;width:0%;border-radius:4px;transition:width 0.3s;"></div>
@@ -712,7 +725,7 @@ async function startCrawl() {
 
   document.getElementById('logContainer').innerHTML = '';
   document.getElementById('progressBar').style.width = '0%';
-  document.getElementById('pageCounter').textContent = '0/50 页';
+  document.getElementById('pageCounter').textContent = '0 页';
   document.getElementById('statusLabel').textContent = '连接中...';
   document.getElementById('depthInfo').textContent = '';
   document.getElementById('retryLabel').style.display = 'none';
@@ -802,7 +815,7 @@ function handleSseEvent(evt) {
       document.getElementById('retryLabel').style.display = 'none';
       document.getElementById('statusLabel').textContent = '站点 '+evt.index+'/'+evt.total+'：'+evt.url;
       document.getElementById('progressBar').style.width = '0%';
-      document.getElementById('pageCounter').textContent = '0/50 页';
+      document.getElementById('pageCounter').textContent = '0 页';
       document.getElementById('nodeDetails').textContent = '';
       renderSiteChips();
       addLog('🌐 站点 '+evt.index+'/'+evt.total+'：'+esc(evt.url), 'info');
@@ -832,10 +845,11 @@ function handleSseEvent(evt) {
     case 'page_crawled':
       pageResults.push(evt);
       if (sitePages) sitePages.push(evt);
-      let max = WizardState.max_pages || 50;
-      let pct = Math.min(100, Math.round((evt.page_count / max) * 100));
+      // 动态分母：后端带 total=已抓+队列剩余（边爬边发现新页会增长）；旧事件无 total 时只显示已爬数
+      let total = (typeof evt.total === 'number' && evt.total > 0) ? evt.total : 0;
+      let pct = total > 0 ? Math.min(100, Math.round((evt.page_count / total) * 100)) : 0;
       document.getElementById('progressBar').style.width = pct+'%';
-      document.getElementById('pageCounter').textContent = evt.page_count+'/'+max+' 页';
+      document.getElementById('pageCounter').textContent = total > 0 ? evt.page_count+'/'+total+' 页' : evt.page_count+' 页';
       document.getElementById('depthInfo').textContent = '深度: 第 '+(evt.depth||0)+' 层';
       let statusIconHtml = statusIcon(evt.success);
       let cls = evt.success ? 'success' : 'error';
@@ -855,7 +869,7 @@ function handleSseEvent(evt) {
       pageResults.splice(siteBaseIdx);
       sitePages = [];
       currentPageMd = {};
-      document.getElementById('pageCounter').textContent = '0/'+(WizardState.max_pages||50)+' 页';
+      document.getElementById('pageCounter').textContent = '0 页';
       document.getElementById('progressBar').style.width = '0%';
       document.getElementById('retryLabel').style.display = 'block';
       document.getElementById('retryLabel').textContent = '第 '+evt.attempt+'/2 轮 — 上次内容过少，正在换策略重试...';
@@ -1784,10 +1798,21 @@ function getLeafOnly() {
   return !!WizardState.leaf_only;
 }
 
-function exportCsv() {
+async function exportCsv() {
   let dir = (crawlMetrics && crawlMetrics.result_dir) || (pageResults[0] && pageResults[0].result_dir) || '';
   if (!dir) { alert('当前没有可导出的批次，请先完成一次爬取'); return; }
-  window.open('/orchestrator/export_csv?result_dir=' + encodeURIComponent(dir) + '&leaf_only=' + (getLeafOnly()?'true':'false'));
+  // fetch+blob 下载：window.open 会被弹窗拦截器静默吞掉，且带不了鉴权头
+  let token = getToken();
+  let headers = {};
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  try {
+    let resp = await fetch('/orchestrator/export_csv?result_dir=' + encodeURIComponent(dir) + '&leaf_only=' + (getLeafOnly()?'true':'false'), { headers });
+    if (!resp.ok) { alert('导出失败: ' + (await resp.text())); return; }
+    let blob = await resp.blob();
+    saveAs(blob, 'crawl_results.csv');
+  } catch (e) {
+    alert('导出失败: ' + e.message);
+  }
 }
 
 async function importToDb(evt) {
