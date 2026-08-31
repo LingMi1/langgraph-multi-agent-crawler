@@ -45,7 +45,7 @@
 
 | 第一步 · 输入目标网址 — 一键开始 | 第二步 · 爬取控制台 — SSE 实时进度 + DAG 流程可视化 |
 |---|---|
-| ![输入网址](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/web-start.png) | ![爬取控制台](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/web-console.png) |
+| <img src="https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/web-start.png" width="640" alt="输入网址"> | <img src="https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/web-console.png" width="640" alt="爬取控制台"> |
 
 ## 系统架构
 
@@ -116,7 +116,7 @@ graph LR
 
 | 层 | 技术 |
 |---|---|
-| 运行时 | Python 3.11 · asyncio（信号量限流） |
+| 运行时 | Python 3.12 · asyncio（信号量限流） |
 | 编排 | LangGraph（StateGraph + TypedDict State + Reducer） |
 | LLM | langchain-openai（DeepSeek 兼容端点）+ 多 provider 故障转移 |
 | 抓取 | httpx / requests · Playwright（JS 渲染降级）· 反爬 Stealth 头 |

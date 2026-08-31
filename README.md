@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/LingMi1/langgraph-multi-agent-crawler/actions/workflows/ci.yml/badge.svg)](https://github.com/LingMi1/langgraph-multi-agent-crawler/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](pyproject.toml)
+[![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](pyproject.toml)
 [![Tests](https://img.shields.io/badge/tests-288%20passed-brightgreen.svg)](tests)
 [![Docs: English](https://img.shields.io/badge/docs-English-blue.svg)](docs/en/README.md)
 [![Docs: 简体中文](https://img.shields.io/badge/docs-简体中文-red.svg)](docs/zh-CN/README.md)
@@ -43,7 +43,7 @@ A real crawl of [hnbn666.cn](http://www.hnbn666.cn/) (RuiQiCMS visual-builder te
 
 | Step 1 · Enter the target URL — one-click start | Step 2 · Crawl console — SSE live progress + DAG visualization |
 |---|---|
-| ![web start](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/web-start.png) | ![web console](https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/web-console.png) |
+| <img src="https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/web-start.png" width="640" alt="web start"> | <img src="https://raw.githubusercontent.com/LingMi1/langgraph-multi-agent-crawler/main/screenshots/web-console.png" width="640" alt="web console"> |
 
 ## Architecture
 

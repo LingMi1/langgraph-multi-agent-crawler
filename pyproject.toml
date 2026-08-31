@@ -7,7 +7,7 @@
 #     代码库全注解后把 advisory 改为强制即可平滑过渡到 mypy 严格模式。
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 ignore_missing_imports = true
 check_untyped_defs = true
 warn_unused_ignores = false
