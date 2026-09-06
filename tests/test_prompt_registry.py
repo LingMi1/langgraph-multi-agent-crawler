@@ -9,6 +9,19 @@ def test_sha256_deterministic(tmp_path):
     assert prompt_registry.sha256_file(str(p)) == prompt_registry.sha256_file(str(p))
 
 
+def test_sha256_line_ending_invariant(tmp_path):
+    """CRLF（Windows 检出）与 LF（Linux CI 检出）同一逻辑内容 → 指纹必须一致。
+
+    回归：基线曾在 Windows 按 CRLF 字节哈希，Linux CI 按 LF 检出后
+    全部 6 个提示词误报漂移（CI 最后一道门禁从未通过）。
+    """
+    crlf = tmp_path / "crlf.txt"
+    lf = tmp_path / "lf.txt"
+    crlf.write_bytes("第1行\n第2行\n".replace("\n", "\r\n").encode("utf-8"))
+    lf.write_bytes("第1行\n第2行\n".encode("utf-8"))
+    assert prompt_registry.sha256_file(str(crlf)) == prompt_registry.sha256_file(str(lf))
+
+
 def test_build_manifest_counts(tmp_path):
     (tmp_path / "提取提示词.txt").write_text("l1\nl2", encoding="utf-8")
     m = prompt_registry.build_manifest(str(tmp_path))

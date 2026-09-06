@@ -32,12 +32,14 @@ MANIFEST_NAME = "prompts_manifest.json"
 
 
 def sha256_file(path: str) -> str:
-    """文件 sha256（流式读取，适配大文件）。"""
-    h = hashlib.sha256()
+    """文件 sha256（换行归一化 CRLF→LF 后再哈希）。
+
+    Windows 检出为 CRLF、Linux CI 检出为 LF：对原始字节哈希会导致同一份内容
+    在两个平台指纹不同、CI 误报漂移。归一化后指纹只取决于逻辑内容。
+    """
     with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 16), b""):
-            h.update(chunk)
-    return h.hexdigest()
+        data = f.read()
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
 
 
 def build_manifest(root: str) -> Dict[str, Dict[str, Any]]:
