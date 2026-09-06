@@ -5,7 +5,7 @@
 [![CI](https://github.com/LingMi1/langgraph-multi-agent-crawler/actions/workflows/ci.yml/badge.svg)](https://github.com/LingMi1/langgraph-multi-agent-crawler/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](pyproject.toml)
-[![Tests](https://img.shields.io/badge/tests-288%20passed-brightgreen.svg)](tests)
+[![Tests](https://img.shields.io/badge/tests-301%20passed-brightgreen.svg)](tests)
 [![Docs: English](https://img.shields.io/badge/docs-English-blue.svg)](docs/en/README.md)
 [![Docs: 简体中文](https://img.shields.io/badge/docs-简体中文-red.svg)](docs/zh-CN/README.md)
 
@@ -35,7 +35,7 @@ Most "AI crawlers" are thin wrappers that call an LLM on every page — slow, ex
 - How do you measure "did this change help" instead of guessing?
 - How do you take over autonomously when deterministic extraction fails?
 
-This project is my answer: a supervisor graph with plan-and-execute and a review loop, backed by a run-level circuit breaker, batched post-hoc rescue, budget-triggered working-memory compaction, an offline golden-set evaluation, and 288 unit tests.
+This project is my answer: a supervisor graph with plan-and-execute and a review loop, backed by a run-level circuit breaker, batched post-hoc rescue, budget-triggered working-memory compaction, an offline golden-set evaluation, and 301 unit tests.
 
 ## Screenshots
 
@@ -121,7 +121,7 @@ graph LR
 | Parse & clean | BeautifulSoup4 · trafilatura · custom rule engine |
 | Data | Pydantic v2 · SQLite (dedup / HTML cache / site memory) · CSV / files |
 | Service | FastAPI · SSE · Docker |
-| Quality | pytest (288) · JSONL traces · golden-set eval · LLM-as-judge · CI |
+| Quality | pytest (301) · JSONL traces · golden-set eval · LLM-as-judge · CI |
 
 ## Quick Start
 
@@ -133,7 +133,7 @@ playwright install chromium          # only for JS-rendered template sites
 python -c "import asyncio; from graph.workflow import run_crawler; asyncio.run(run_crawler('https://example.com', max_steps=3000))"
 
 # Unit tests
-python -m pytest tests -q            # 288 passed
+python -m pytest tests -q            # 301 passed
 
 # MCP stdio round-trip (handshake → tool discovery → call_tool → error channel)
 python tools/mcp_client.py https://example.com/
@@ -173,7 +173,7 @@ Desktop GUI (tkinter): `python site_crawler_gui.py` (batch URL import from TXT +
 │                    #   + react (FC loop) + semdedup + vector_retriever + eval
 ├── graph/           # orchestration: workflow (Supervisor) / agents (9) / nodes / state
 │                    #   + react_takeover (deep-degradation ReAct takeover)
-├── tests/           # 288 unit tests (safety / plan / tools / ReAct / budgeting /
+├── tests/           # 301 unit tests (safety / plan / tools / ReAct / budgeting /
 │                    #   dedup / RAG / eval metrics / FC eval path / graph smoke /
 │                    #   golden loop / regression / takeover / breaker+rescue /
 │                    #   MCP / API / distributed queue)
@@ -191,15 +191,17 @@ Desktop GUI (tkinter): `python site_crawler_gui.py` (batch URL import from TXT +
 
 ## Testing
 
-**288 unit tests, all green.** Every subsystem has dedicated coverage: safety (injection defense), plan-and-execute, BaseAgent template, tool layer + tool-arg sanitization, ReAct loop, token budgeting, compaction (8 cases: trigger boundary / system+recent-frame retention / summary fallback / loop convergence), Jaccard dedup, RAG retrieval metrics + two-stage reranking, trace-analysis (token/cost + agent success rate), eval metrics, FC evaluation path, graph assembly smoke, golden regression loop, deep-degradation takeover, circuit breaker + batched rescue, MCP tool layer, API service layer (incl. SSE), and the distributed queue with multiprocessing consumption.
+**301 unit tests, all green.** Every subsystem has dedicated coverage: safety (injection defense), plan-and-execute, BaseAgent template, tool layer + tool-arg sanitization, ReAct loop, token budgeting, compaction (8 cases: trigger boundary / system+recent-frame retention / summary fallback / loop convergence), Jaccard dedup, RAG retrieval metrics + two-stage reranking, trace-analysis (token/cost + agent success rate), eval metrics, FC evaluation path, graph assembly smoke, core decision routing (all 13 branches of the three supervisor adjudication functions), golden regression loop, deep-degradation takeover, circuit breaker + batched rescue, MCP tool layer, API service layer (incl. SSE), and the distributed queue with multiprocessing consumption.
 
 ```
-python -m pytest tests -q            # 288 passed
+python -m pytest tests -q            # 301 passed
 python tools/static_check.py         # 64 files / 0 issues (self-built checker, ruff-verified in CI)
 python tools/check_links.py          # markdown relative links (screenshots / docs)
 ```
 
 The CI pipeline (`.github/workflows/ci.yml`) runs pytest + coverage, the double static check, golden verification, and (advisory) mypy on every push.
+
+**Coverage, honestly**: the CI gate is 30% (~35% measured on the 3.12 leg). The 301 tests concentrate on the agent behavior layer (safety / ReAct / budgeting / breaker / compaction / eval metrics) plus the tool, API and queue layers; the 5.4k-line orchestration module `graph/nodes.py` is backed by the graph smoke test and the golden end-to-end eval, with unit-level routing tests being added incrementally. I care more about stating exactly *what* is tested and *what backs the rest* than about inflating the number.
 
 ## Key Design Decisions
 
@@ -237,4 +239,4 @@ Claiming is atomic (`BEGIN IMMEDIATE`), so N workers never double-grab a task; l
 
 ---
 
-*Measured results (offline-reproducible via `python tools/gen_metrics_report.py`): 8 real sites / 236 pages harvested; golden offline eval on hnbn666 (RuiQiCMS visual-builder template) = PASS with P/R/F1 0.60/1.00/0.75; 288 tests all green. Development milestones (CHANGELOG): a full crawl of zztzmjg.com went from stalled overnight at 86 pages to 85 seconds with 3 LLM calls via the circuit breaker + batched rescue; evaluation loops fired 12 config adjustments across 4 runs (saved 1→98 on xnjzgc.cn); the site-memory warm start hit 100%; the distributed scheduler ran 3 sites × 2 workers exactly-once.*
+*Measured results (offline-reproducible via `python tools/gen_metrics_report.py`): 8 real sites / 236 pages harvested; golden offline eval on hnbn666 (RuiQiCMS visual-builder template) = PASS with P/R/F1 0.60/1.00/0.75; 301 tests all green. Development milestones (CHANGELOG): a full crawl of zztzmjg.com went from stalled overnight at 86 pages to 85 seconds with 3 LLM calls via the circuit breaker + batched rescue; evaluation loops fired 12 config adjustments across 4 runs (saved 1→98 on xnjzgc.cn); the site-memory warm start hit 100%; the distributed scheduler ran 3 sites × 2 workers exactly-once.*
