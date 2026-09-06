@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 
-from tools.analyze_trace import _collect_explicit_cost, _estimate_cost, summarize
+from tools.analyze_trace import _collect_explicit_cost, summarize
 
 BASE = {
     "run_id": "test_run",

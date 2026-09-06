@@ -11,6 +11,9 @@ crawler.log
 crawler.log.bak*
 selector_cache.json
 
+# ── 覆盖率原始数据（coverage debug 输出，非报告产物） ──
+*.cover
+
 # ── 调试 / 临时脚本 ──
 _debug_*.py
 _run_*.py

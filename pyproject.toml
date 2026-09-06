@@ -18,6 +18,8 @@ warn_unused_ignores = false
 # ruff 与自研 static_check 保持同规则子集（CI / pre-commit 交叉验证）：
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint]
 select = ["F401", "F403", "F811", "F821"]
 
 [tool.coverage.report]

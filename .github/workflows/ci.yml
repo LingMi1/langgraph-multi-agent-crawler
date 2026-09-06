@@ -24,7 +24,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.lock
           pip install pytest pytest-asyncio pytest-cov
-          pip install ruff mypy
+          # 锁次版本：ruff 新次版会引入新规则导致 CI 意外变红（2026-08-31 教训），补丁级更新仍照常进入
+          pip install "ruff==0.16.*" "mypy==2.3.*"
 
       - name: 单元测试（safety / plan / BaseAgent / 工具 / 记账 / ReAct / 去重 / 图装配冒烟）
         run: python -m pytest tests -q

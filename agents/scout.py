@@ -8,7 +8,6 @@ Agent 1: ScoutAgent — 侦察兵
 from __future__ import annotations
 
 import re
-import asyncio
 from urllib.parse import urlparse
 
 import httpx

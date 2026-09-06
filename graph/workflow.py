@@ -46,7 +46,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Dict, Optional, Callable
+from typing import Any, Dict, Optional, Callable
 
 from langgraph.graph import StateGraph, END, START
 
@@ -154,7 +154,7 @@ def build_crawler_graph(agents: Dict[str, BaseAgent]) -> StateGraph:
 # 运行时入口
 # ============================================================================
 
-def build_app(seed_url: str, concurrency: int = 3) -> "tuple[Any, AgentContext]":
+def build_app(seed_url: str, concurrency: int = 3) -> tuple[Any, AgentContext]:
     """
     构建一次运行所需的 (编译图, AgentContext)。
 

@@ -63,10 +63,8 @@ from agents.fetcher import _fetch_with_playwright_sync as _pw_fetch_sync
 from agents.extractor import (
     TrafilaturaExtractor,
     _is_list_page,
-    _extract_with_trafilatura,
     _extract_with_bs4,
     _collect_images,
-    _absolutize_image_urls,
     _compute_md5,
 )
 from agents.storage import FileSystemStorage, CSV_FIELDS
@@ -3076,7 +3074,6 @@ async def _llm_analyze_failed_images(
 
 def _re_write_html_files(results: List[Dict], output_dir: str) -> None:
     """用 Base64 化后的 HTML 覆盖之前保存的 HTML 文件"""
-    import re
     for row in results:
         if not row or not isinstance(row, dict):
             continue
@@ -4479,7 +4476,6 @@ def _build_structured_content(rescued_html: str, page_url: str = "", content_sel
       3. 内容区内: <a>→<span>、删除侧边栏块、删除噪音块
       4. 返回结构化的 body 内容 HTML
     """
-    import re as _re
 
     if not rescued_html:
         return ""
@@ -5586,7 +5582,6 @@ def _slim_html_for_csv(html: str) -> str:
 
 async def _write_csv(csv_path: str, rows: List[Dict[str, str]]) -> None:
     """写入 CSV（带 BOM，文件锁保护）"""
-    import csv
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, _write_csv_sync, csv_path, rows)
 
