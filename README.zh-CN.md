@@ -1,4 +1,4 @@
-﻿# LangGraph 多智能体网页采集器
+# LangGraph 多智能体网页采集器
 
 [English](README.md)
 

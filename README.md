@@ -1,4 +1,4 @@
-﻿# LangGraph Multi-Agent Crawler
+# LangGraph Multi-Agent Crawler
 
 [简体中文](README.zh-CN.md)
 
