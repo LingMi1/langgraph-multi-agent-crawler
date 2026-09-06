@@ -1,11 +1,11 @@
-# LangGraph 多智能体网页采集器
+﻿# LangGraph 多智能体网页采集器
 
 [English](README.md)
 
 [![CI](https://github.com/LingMi1/langgraph-multi-agent-crawler/actions/workflows/ci.yml/badge.svg)](https://github.com/LingMi1/langgraph-multi-agent-crawler/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](pyproject.toml)
-[![Tests](https://img.shields.io/badge/tests-301%20passed-brightgreen.svg)](tests)
+[![Tests](https://img.shields.io/badge/tests-302%20passed-brightgreen.svg)](tests)
 [![Docs: English](https://img.shields.io/badge/docs-English-blue.svg)](docs/en/README.md)
 [![Docs: 简体中文](https://img.shields.io/badge/docs-简体中文-red.svg)](docs/zh-CN/README.md)
 
@@ -37,7 +37,7 @@
 - 怎么把"这次改动有没有变好"从感觉变成数字？
 - 确定性提取全失败时，系统怎么自主接管？
 
-这个项目就是我的答案：Supervisor 图 + 计划-执行-审查闭环，配套运行级熔断、批量后置抢救、预算触发的上下文压缩、离线 Golden 评估与 301 项单元测试。
+这个项目就是我的答案：Supervisor 图 + 计划-执行-审查闭环，配套运行级熔断、批量后置抢救、预算触发的上下文压缩、离线 Golden 评估与 302 项单元测试。
 
 ## 界面截图
 
@@ -123,7 +123,7 @@ graph LR
 | 解析清洗 | BeautifulSoup4 · trafilatura · 自研规则引擎 |
 | 数据 | Pydantic v2 · SQLite（去重 / HTML 缓存 / 站点记忆）· CSV / 文件 |
 | 服务化 | FastAPI · SSE · Docker |
-| 质量 | pytest（301）· JSONL 全轨迹 · Golden 评估 · LLM-as-judge · CI |
+| 质量 | pytest（302）· JSONL 全轨迹 · Golden 评估 · LLM-as-judge · CI |
 
 ## 快速开始
 
@@ -135,7 +135,7 @@ playwright install chromium          # 仅 JS 模板站渲染需要
 python -c "import asyncio; from graph.workflow import run_crawler; asyncio.run(run_crawler('https://example.com', max_steps=3000))"
 
 # 单元测试
-python -m pytest tests -q            # 301 passed
+python -m pytest tests -q            # 302 passed
 
 # MCP stdio 双向链路（握手→工具发现→call_tool→错误通道）
 python tools/mcp_client.py https://example.com/
@@ -178,7 +178,7 @@ python tools/rag_demo.py hnbn666
 │                    #   + react（FC 闭环）+ semdedup 去重 + vector_retriever RAG + eval
 ├── graph/           # 编排级：workflow（Supervisor）/ agents（9 个）/ nodes / state
 │                    #   + react_takeover（深降级 ReAct 接管）
-├── tests/           # 301 项单元测试（safety / plan / BaseAgent / 工具 / 工具安全 /
+├── tests/           # 302 项单元测试（safety / plan / BaseAgent / 工具 / 工具安全 /
 │                    #   ReAct / 记账 / 去重 / RAG / 评估指标 / FC 评估链路 /
 │                    #   图装配冒烟 / golden 回归 / 接管 / 熔断+抢救 / MCP /
 │                    #   API / 分布式队列）
@@ -196,10 +196,10 @@ python tools/rag_demo.py hnbn666
 
 ## 测试
 
-**301 项单元测试全绿。** 每个子系统都有独立覆盖：安全（注入防护）、计划-执行、BaseAgent 模板、工具层 + 工具参数净化、ReAct 循环、token 记账、上下文压缩（8 个用例：触发边界 / system+最近帧保留 / 摘要兜底 / 循环收敛）、Jaccard 去重、RAG 检索指标 + 两阶段重排序、轨迹分析（token/成本 + Agent 成功率）、评估指标、FC 评估链路、图装配冒烟、核心决策路由（Supervisor 三个裁决函数全部 13 个分支）、golden 回归、深降级接管、熔断 + 批量抢救、MCP 工具层、API 服务层（含 SSE）、分布式队列 + 多进程消费。
+**302 项单元测试全绿。** 每个子系统都有独立覆盖：安全（注入防护）、计划-执行、BaseAgent 模板、工具层 + 工具参数净化、ReAct 循环、token 记账、上下文压缩（8 个用例：触发边界 / system+最近帧保留 / 摘要兜底 / 循环收敛）、Jaccard 去重、RAG 检索指标 + 两阶段重排序、轨迹分析（token/成本 + Agent 成功率）、评估指标、FC 评估链路、图装配冒烟、核心决策路由（Supervisor 三个裁决函数全部 13 个分支）、golden 回归、深降级接管、熔断 + 批量抢救、MCP 工具层、API 服务层（含 SSE）、分布式队列 + 多进程消费。
 
 ```
-python -m pytest tests -q            # 301 passed
+python -m pytest tests -q            # 302 passed
 python tools/static_check.py         # 64 文件 / 0 问题（自研检查器，CI 中 ruff 交叉验证）
 python tools/check_links.py          # Markdown 相对链接（截图 / 文档）
 ```
@@ -256,7 +256,7 @@ FC 循环内的对话历史是工作记忆；正确的决策活在结构化 `Cra
 **当前指标（离线可复现，见 `reports/metrics_report.md`）**
 - 8 个真实站点累计落盘 236 个 HTML 页面（clypg.cn 66 / dfgycrisp.com 72 / jstcba.cn 24 / zsyllh.cn 23 / cqht.cn 19 / sanzhigua.com 11 / huinenggroup.com 11 / hnbn666.cn 10）。
 - Golden 离线评估：hnbn666（RuiQiCMS 可视化建站模板）判定 **PASS**，P/R/F1 = 0.60 / 1.00 / 0.75。
-- 301 项单元测试全绿。
+- 302 项单元测试全绿。
 
 **开发过程里程碑（详见 CHANGELOG）**
 - 熔断+抢救把 zztzmjg.com 从"86 页停滞整夜"变成"85 秒全站跑完、LLM 调用 3 次"。
