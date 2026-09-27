@@ -108,7 +108,7 @@ graph LR
 - **Lightweight RAG** (`agents/semdedup.py` + `agents/vector_retriever.py`) — character-level n-gram Jaccard near-duplicate detection (no tokenizer/vector DB), plus a zero-dependency TF-IDF cosine retriever over harvested pages with two-stage reranking (pseudo-relevance-feedback query expansion + score fusion), scored with Recall@k / NDCG@k.
 - **MCP integration** (`tools/mcp_server.py` + `tools/mcp_client.py`) — action/analysis tools exposed as MCP stdio tools (protocol 2025-11-25), single-source executors shared with the in-process function-calling path; fail-closed error channel.
 - **FastAPI service** (`api/server.py`) — `POST /crawl` (202 / 409 single-slot busy / 429 throttled), `GET /tasks/{id}`, `GET /tasks/{id}/results`; X-API-Key auth, per-client submit throttling, Dockerfile. The service layer holds **zero business logic** — CLI, desktop GUI, and REST share one `run_langgraph_crawler` entry (three shells, one core).
-- **Lightweight distributed scheduler** (`distributed/`) — stdlib SQLite task queue + multiprocessing workers, zero new dependencies: `BEGIN IMMEDIATE` atomic claim, lease + heartbeat + crash recovery, attempts-bounded retry. Shard dimension is the *site* (each worker runs one site's full workflow). Batch-ran 3 real sites with 2 workers to `{'done': 3}`, `attempts=1` each — exactly-once.
+- **Lightweight distributed scheduler** (`distributed/`) — stdlib SQLite task queue + multiprocessing workers, zero new dependencies: `BEGIN IMMEDIATE` atomic claim, lease + heartbeat + crash recovery, attempts-bounded retry. Shard dimension is the *site* (each worker runs one site's full workflow). Batch-ran 3 real sites with 2 workers to `{'done': 3}`, `attempts=1` each — zero duplicate execution measured (at-least-once semantics by design; the lease is a timeout, not a lock).
 
 ## Tech Stack
 
@@ -229,7 +229,7 @@ Compliance and transport security default to safe: robots.txt checked before eve
 
 The workload is tens of sites; the bottleneck is site I/O, not queue throughput. A `BEGIN IMMEDIATE` write lock is enough mutual exclusion for N workers, and SQLite means zero new infrastructure and zero ops. **Trade-off:** single-node horizontal scale only — accepted because the shard dimension is the site (each worker runs one site's whole workflow), and cross-process LangGraph state is architecturally unsupported anyway.
 
-### 7. Exactly-once via atomic claim + lease
+### 7. Zero duplicate execution via atomic claim + lease
 
 Claiming is atomic (`BEGIN IMMEDIATE`), so N workers never double-grab a task; leases expire and stale tasks are requeued (at-least-once), and attempts are bounded (fail → retry until cap → terminal `failed`). Measured: 3 sites × 2 workers → `{'done': 3}`, `attempts=1` each. **Trade-off:** a lease is a timeout, not a lock — a crashed worker's task is redone, which is the accepted at-least-once semantic dressed in exactly-once measurement.
 
@@ -239,4 +239,4 @@ Claiming is atomic (`BEGIN IMMEDIATE`), so N workers never double-grab a task; l
 
 ---
 
-*Measured results (offline-reproducible via `python tools/gen_metrics_report.py`): 8 real sites / 236 pages harvested; golden offline eval on hnbn666 (RuiQiCMS visual-builder template) = PASS with P/R/F1 0.60/1.00/0.75; 302 tests all green. Development milestones (CHANGELOG): a full crawl of zztzmjg.com went from stalled overnight at 86 pages to 85 seconds with 3 LLM calls via the circuit breaker + batched rescue; evaluation loops fired 12 config adjustments across 4 runs (saved 1→98 on xnjzgc.cn); the site-memory warm start hit 100%; the distributed scheduler ran 3 sites × 2 workers exactly-once.*
+*Measured results (offline-reproducible via `python tools/gen_metrics_report.py`): 8 real sites / 236 pages harvested; golden offline eval on hnbn666 (RuiQiCMS visual-builder template) = PASS with P/R/F1 0.60/1.00/0.75; 302 tests all green. Development milestones (CHANGELOG): a full crawl of zztzmjg.com went from stalled overnight at 86 pages to 85 seconds with 3 LLM calls via the circuit breaker + batched rescue; evaluation loops fired 12 config adjustments across 4 runs (saved 1→98 on xnjzgc.cn); the site-memory warm start hit 100%; the distributed scheduler ran 3 sites × 2 workers with zero duplicate execution (attempts=1 each).*
